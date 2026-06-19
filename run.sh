@@ -22,6 +22,7 @@ arch -x86_64 swiftc \
     "$PROJECT_ROOT/Promptly/HotkeyManager.swift" \
     "$PROJECT_ROOT/Promptly/PromptStore.swift" \
     "$PROJECT_ROOT/Promptly/PasteService.swift" \
+    "$PROJECT_ROOT/Promptly/PromptEditorPanel.swift" \
     "$PROJECT_ROOT/Promptly/PanelController.swift" \
     "$PROJECT_ROOT/Promptly/main.swift" \
     -Xlinker -sectcreate \
