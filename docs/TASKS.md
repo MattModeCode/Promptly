@@ -3,7 +3,7 @@
 Solo, weekend-burst friendly: each box is sized to finish in one sitting, and each **stage names
 the friction signal that authorizes the next**. Don't pre-build later stages — let real use pull them.
 
-Sibling docs: [PRD.md](PRD.md) · [FEATURES.md](FEATURES.md) · [DESIGN.md](DESIGN.md)
+Sibling docs: [PRD.md](PRD.md) · [FEATURES.md](FEATURES.md) · [DESIGN.md](DESIGN.md) · [FEATURE-CATALOG.md](FEATURE-CATALOG.md) · [stages/](stages/) · [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md)
 
 Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
@@ -14,10 +14,22 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 `PasteProbe.swift` exists and typechecks for x86_64. Extend it, then run it against all 5 targets.
 
 **Extend the spike:**
-- [ ] Add **read-back verification** — after each attempt (B and A), read `kAXValueAttribute` /
+- [x] Add **read-back verification** — after each attempt (B and A), read `kAXValueAttribute` /
   `kAXSelectedTextRange` and assert the marker actually landed. (Exit criterion is read-back, not `.success`.)
-- [ ] Add a **per-target evidence dump** — focused-element role, is-settable(selected-text), is-settable(value),
+- [x] Add a **per-target evidence dump** — focused-element role, is-settable(selected-text), is-settable(value),
   which strategy fired, read-back result. (~30 lines; becomes the empirical basis for the §2.2 decision table.)
+- [x] **[review D1] Target the captured app by pid** — `AXUIElementCreateApplication(pid)` →
+  `kAXFocusedUIElementAttribute`, NOT system-wide focus. Implements invariant 2 in code. (`copyFocusedElement(forPid:)`.)
+- [x] **[review D2] Run under a nonactivating KEY panel** — bring up a `.nonactivatingPanel` that becomes
+  key before probing; log the divergence (system-wide focus → the panel field; pid-targeted → the host field).
+  This reproduces the app's real runtime condition the bare spike skipped. (`makeKeyProbePanel`.)
+- [x] **[review A3] Anchor read-back on the length delta** — confirm the field grew by exactly `marker.count`
+  (or equals it for a value-set into an empty field), not a naive `contains()` that false-positives. (`ReadBack`.)
+
+> **Manual run still required (author):** `arch -x86_64 swift PasteProbe.swift`, click into each app within
+> the lead time, grant Accessibility to Terminal. The new evidence rows to read: **panel was KEY**,
+> **system-wide role** (expect the panel field), **pid-targeted role** (expect the host field). The gate
+> passes only if the pid-targeted read finds the host field with the panel key.
 
 **Run the matrix** — `arch -x86_64 swift PasteProbe.swift`, click into a field in each app within the lead time:
 
@@ -50,28 +62,26 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 **Exit criterion:** ⌥Space → filter → ↵ pastes the selected prompt into the frontmost app, cursor
 correct, focus never stolen, ~700ms — **and you've reached for ⌥Space without thinking, once.**
 
-- [ ] Xcode menu-bar agent app: `LSUIElement`, no Dock icon, status item.
-- [ ] **From this first build:** ad-hoc signing (`CODE_SIGN_IDENTITY="-"`), stable
+- [x] Xcode menu-bar agent app: `LSUIElement`, no Dock icon, status item.
+- [x] **From this first build:** ad-hoc signing (`CODE_SIGN_IDENTITY="-"`), stable
   `PRODUCT_BUNDLE_IDENTIFIER`, fixed install path, `ARCHS=x86_64`. Write **`run.sh`** (build →
   install → kill → relaunch → tail log).
-- [ ] `HotkeyManager` — Carbon `RegisterEventHotKey` for ⌥Space, consumed, behind a protocol.
-- [ ] `Capture` — snapshot `frontmostApplication` (enforce invariant 1).
-- [ ] `PanelController` — nonactivating `NSPanel`, filter field, results list; the four states (FEATURES §2).
-- [ ] `PasteService` — **extract the proven spike code verbatim** (capability probe + read-back + restore).
-- [ ] `PromptStore` — markdown-per-file loader (DESIGN §7) + `DispatchSource` live-reload + fuzzy filter.
-- [ ] Default state shows **top ~6 most-recently-used** (simple last-used timestamp; not the Stage-6
+- [x] `HotkeyManager` — Carbon `RegisterEventHotKey` for ⌥Space, consumed, behind a protocol.
+- [x] `Capture` — snapshot `frontmostApplication` (enforce invariant 1).
+- [x] `PanelController` — nonactivating `NSPanel`, filter field, results list; the four states (FEATURES §2).
+- [x] `PasteService` — **extract the proven spike code verbatim** (capability probe + read-back + restore).
+- [x] `PromptStore` — markdown-per-file loader (DESIGN §7) + `DispatchSource` live-reload + fuzzy filter.
+- [x] Default state shows **top ~6 most-recently-used** (simple last-used timestamp; not the Stage-6
   frecency engine — cold launch falls back to seed order); selected row unmistakable; clamp on ↑/↓.
-- [ ] **Silent success, loud failure** (FEATURES §3); leave text on clipboard on failure.
-- [ ] **Lazy first-run** Accessibility screen + dimmed menu-bar icon when not granted (FEATURES §4).
-- [ ] Menu-bar dropdown: AX status, hotkey rebind, open prompts folder (FEATURES §5).
-- [ ] `os_log` four events (DESIGN §9); add the `log stream` one-liner to README.
-- [ ] **Seed a real library — 8–10 prompts you genuinely reach for** (not placeholders), plus the
-  **"token cheatsheet"**. *A thin library never becomes a reflex; this is the cold-start that decides
-  whether the week-long bet even gets a fair test (CEO review: top risk to "crosses over").*
+- [x] **Silent success, loud failure** (FEATURES §3); leave text on clipboard on failure.
+- [x] **Lazy first-run** Accessibility screen + dimmed menu-bar icon when not granted (FEATURES §4).
+- [x] Menu-bar dropdown: AX status, hotkey rebind, open prompts folder (FEATURES §5).
+- [x] `os_log` four events (DESIGN §9); add the `log stream` one-liner to README.
+- [x] **Seed a real library — 8–10 prompts you genuinely reach for** (not placeholders), plus the
+  **"token cheatsheet"**. 10 prompts in `Resources/SeedPrompts/` with JetBrains Mono bundled.
 
-**Manual verification:** trigger ⌥Space from inside each of the 5 apps — paste + cursor + no focus
-theft, latency feels sub-second; rebuild and confirm Accessibility **persists** (the stable-bundle-ID fix).
-**The seeded library is real enough that you'd actually use ⌥Space instead of typing the prompt by hand.**
+**Manual verification (pending — author):** trigger ⌥Space from inside each of the 5 apps — paste +
+cursor + no focus theft, latency feels sub-second; rebuild and confirm Accessibility **persists**.
 
 ---
 
@@ -80,7 +90,13 @@ theft, latency feels sub-second; rebuild and confirm Accessibility **persists** 
 **Exit criterion:** you can add/edit/delete a prompt without hand-editing a file — *and you wanted
 to, because hand-editing markdown finally got annoying* (that annoyance is the signal; not before).
 
-- [ ] In-app add/edit/delete writing the same markdown files. (No DB.)
+- [x] `PromptStore.save(name:keywords:body:filename:)` — writes/overwrites `~/Prompts/<slug>.md` with YAML frontmatter + body.
+- [x] `PromptStore.delete(_:)` — removes the file and purges its `lastUsed` entry.
+- [x] `PromptEditorPanel` — dark-palette NSWindow with name/keywords/body fields; `forNew` and `forEdit` modes.
+- [x] Panel ⌫ key (when filter empty) — confirmation alert → `PromptStore.delete()` → reload.
+- [x] Panel ⌘E — opens editor pre-filled with selected prompt.
+- [x] Status-bar "New Prompt…" — opens blank editor; Save writes a new file.
+- [ ] **Manual verification:** status-bar → New Prompt → fill → Save → appears in ⌥Space list; open panel, select, ⌫ → confirm → gone.
 
 ---
 

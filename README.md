@@ -1,4 +1,4 @@
-# Prompt Palette
+# Promptly
 
 A native macOS prompt launcher that comes to *you*. Hit **⌥Space** in any text field, type a
 fragment, the right template is already highlighted, hit **↵**, and the fully-assembled prompt
@@ -23,19 +23,23 @@ then invisible again. The proof it's working: within a week you reach for ⌥Spa
 
 ## For developers (working on this today)
 
-**Where am I?** → Gate 0: the paste-loop spike. The next checkbox is *extend `PasteProbe.swift`
-with read-back verification + a per-target evidence dump, then run the 5-target matrix*. See
-[docs/TASKS.md](docs/TASKS.md). Nothing app-side gets built until the spike is 5/5 green.
+**Where am I?** → Gate 0: the paste-loop spike. The spike is **already extended** (read-back
+verification + per-target evidence dump are done — see the `[x]` boxes in [docs/TASKS.md](docs/TASKS.md)).
+The next checkbox is the **manual 5-target matrix run**: `arch -x86_64 swift PasteProbe.swift`,
+click into each target within the 4-second countdown, and paste each evidence row the probe prints
+into TASKS §Gate 0. Nothing app-side gets built until the spike is 5/5 green.
 
 **How do I run it?**
 
 ```bash
-# The spike (Apple Intel / x86_64). Click into a target field within the lead time:
+# The spike (Apple Intel / x86_64) — the one thing that runs today. It counts down 4s,
+# then probes; click into a target field before it fires:
 arch -x86_64 swift PasteProbe.swift
-
-# The app (once it exists): one command IS the whole dev loop — build, install, relaunch, tail log:
-./run.sh
 ```
+
+> **`run.sh` does not exist yet.** It's a Stage-1 deliverable (build → install → relaunch →
+> tail log) — see [docs/TASKS.md](docs/TASKS.md) Stage 1. Once the app target exists, `./run.sh`
+> becomes the whole dev loop and THE command in this section. Until then, the spike above is it.
 
 > Builds target **Apple Intel (x86_64)** — `arch -x86_64` for the spike, `ARCHS=x86_64` for the
 > app. arm64/universal is an explicit future decision, not a default.
@@ -43,7 +47,7 @@ arch -x86_64 swift PasteProbe.swift
 **Watch what the (invisible) paste loop is doing:**
 
 ```bash
-log stream --predicate 'subsystem == "com.promptpalette"'   # AX status · strategy · paste result · clipboard restore
+log stream --predicate 'subsystem == "com.promptly"'   # AX status · strategy · paste result · clipboard restore
 ```
 
 **What will bite you** (full list in [CLAUDE.md](CLAUDE.md) → *Things That Will Bite You*):
@@ -61,6 +65,9 @@ log stream --predicate 'subsystem == "com.promptpalette"'   # AX status · strat
 | [docs/FEATURES.md](docs/FEATURES.md) | UX/interaction spec + ASCII mockups of every palette state. |
 | [docs/DESIGN.md](docs/DESIGN.md) | Technical design: the paste loop, paste service, hotkey, permissions, modules. |
 | [docs/TASKS.md](docs/TASKS.md) | Gated build checklist (the spike is the gate). |
+| [docs/FEATURE-CATALOG.md](docs/FEATURE-CATALOG.md) | The whole feature universe in one index — committed / candidate / non-goal. |
+| [docs/stages/](docs/stages/) | Per-stage execution files (one self-contained brief per roadmap stage). |
+| [docs/AGENT-WORKFLOW.md](docs/AGENT-WORKFLOW.md) | How to build each stage with subagents (gate-aware, Tier A/B-bound). |
 | [CLAUDE.md](CLAUDE.md) | Guidance for Claude Code + project boundaries + hazards. |
 
 Full original vision/design doc:

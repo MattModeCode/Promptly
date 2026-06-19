@@ -1,7 +1,7 @@
 # DESIGN — Technical Design
 
 **Status:** Pre-scaffold · **Stack:** native Swift / AppKit · **Arch:** Apple Intel (x86_64)
-Sibling docs: [PRD.md](PRD.md) · [FEATURES.md](FEATURES.md) · [TASKS.md](TASKS.md)
+Sibling docs: [PRD.md](PRD.md) · [FEATURES.md](FEATURES.md) · [TASKS.md](TASKS.md) · [FEATURE-CATALOG.md](FEATURE-CATALOG.md) · [stages/](stages/) · [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md)
 
 Seeded from the office-hours design doc (see [Deeper Context](#11-deeper-context)). This is the
 engineering source of truth; where it and FEATURES.md overlap, FEATURES owns *look/feel* and
@@ -47,6 +47,11 @@ a pizza you haven't proven you can bake. Prove the loop first (the spike), then 
    re-asserted as target, not whatever is frontmost now (an app switch mid-palette must not
    redirect the paste).
 3. **main-thread-only** — all AX and AppKit calls run on the main thread (AX is main-thread-affine).
+4. **panel-on-captured-app-display** — the target `NSScreen` is part of the capture snapshot (a
+   corollary of invariant 1): derive it from the captured app's key window and center the panel
+   there, falling back to `NSScreen.main` if it can't be resolved. The panel must not appear on the
+   mouse's screen or on whatever is frontmost *now* — it appears where the captured app lives, so
+   the hand learns one position (FEATURES §1 → Position).
 
 ---
 
@@ -136,7 +141,7 @@ already passed the spike.
 **Fix, applied from the very first app build:**
 1. **Stabilize `PRODUCT_BUNDLE_IDENTIFIER`** and **ad-hoc code-sign** (`CODE_SIGN_IDENTITY="-"`) so
    successive builds are the *same* app to macOS and keep the grant. (Highest-leverage DevEx fix.)
-2. **Build to a fixed install path** (e.g. `~/Applications/PromptPalette.app`) — TCC keys partly on path.
+2. **Build to a fixed install path** (e.g. `~/Applications/Promptly.app`) — TCC keys partly on path.
 3. Escape hatch when it does get confused: `tccutil reset Accessibility <bundle-id>`.
 
 Surface AX status **loudly at runtime**: check `AXIsProcessTrusted()` on launch and every hotkey
@@ -153,7 +158,7 @@ Flat, one file each. Keep it minimal but clean.
 |--------|----------------|
 | `main.swift` / `AppDelegate` | `@main`, `LSUIElement` (no Dock icon), status item; owns the others. |
 | `HotkeyManager` | Registers ⌥Space (Carbon), fires a closure. Mechanism swappable behind one protocol. |
-| `PanelController` | Owns the `.nonactivatingPanel`, the filter field, the results list. `present(captured:)` / `dismiss()`. |
+| `PanelController` | Owns the `.nonactivatingPanel`, the filter field, the results list. `present(captured:)` / `dismiss()`. **Opaque `#0f0f14` content view at 6px radius — NOT `NSVisualEffectView`; bundle + register JetBrains Mono (fallback `.monospacedSystemFont`). Visual system: FEATURES §0.** Also owns: the **fixed-height 6-row scrolling viewport** (scroll-past-6, clamp at full-list ends — FEATURES §1), the **zero-prompts state** (A0) and persistent footer (FEATURES §2), screen targeting per **invariant 4**, and the **Reduce-Motion / Increase-Contrast / VoiceOver** behavior (FEATURES §9). `present(captured:)` takes the captured app's screen, not just the app. |
 | `PasteService` | The spike's two strategies + capability probe + read-back, behind one `paste(_:into:) -> Result`. **Only module that must not drift from spike behavior — extract it verbatim.** |
 | `PromptStore` | Loads markdown-per-file prompts (§7), live-reload, in-memory `[Prompt]` + fuzzy filter. No DB. |
 | `Capture` | Thin wrapper for the `frontmostApplication` snapshot, so ordering (invariant 1) is enforced in one place. |
@@ -167,6 +172,9 @@ Flat, one file each. Keep it minimal but clean.
 - Commit: ~80ms selected-row pulse → ~120ms panel fade, paste fired under the fade.
 - Sequence at ↵: dismiss/fade panel **and re-assert captured app as target before pasting**
   (invariant 2), then paste, then complete fade.
+- **Reduce Motion:** when `accessibilityDisplayShouldReduceMotion` is set, skip the pulse and the
+  0.98 scale — use an instant or short opacity-only dismiss. The ~700ms feel is about latency, not
+  animation; dropping the choreography never delays the paste (FEATURES §2 State D, §9).
 
 ---
 

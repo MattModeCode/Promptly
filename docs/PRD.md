@@ -1,8 +1,8 @@
-# PRD — Sub-Second Prompt Palette
+# PRD — Promptly
 
 **Status:** Pre-scaffold · **Audience:** the author (solo) · **Platform:** macOS, native Swift/AppKit, Apple Intel (x86_64)
 
-Sibling docs: [FEATURES.md](FEATURES.md) · [DESIGN.md](DESIGN.md) · [TASKS.md](TASKS.md) · root [README](../README.md)
+Sibling docs: [FEATURES.md](FEATURES.md) · [DESIGN.md](DESIGN.md) · [TASKS.md](TASKS.md) · [FEATURE-CATALOG.md](FEATURE-CATALOG.md) · [stages/](stages/) · [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md) · root [README](../README.md)
 
 ---
 
@@ -78,18 +78,20 @@ imaginary general user now would add weight that fights the feeling.
 Specified at **tiered depth**: the spike + MVP deeply (see FEATURES/DESIGN/TASKS); stages 3–8 as
 intent + rough acceptance criteria + open questions, to be pulled by real friction, not pre-built.
 
-| # | Stage | One-line intent |
-|---|-------|-----------------|
-| 0 | **Spike** | Prove the paste loop in `PasteProbe.swift` across 5 targets. **Gate.** |
-| 1 | **MVP palette** | ⌥Space → nonactivating panel → fuzzy filter → ↵ paste. Markdown-file prompts + live-reload. |
-| 2 | **Prompt store + CRUD** | In-app add/edit/delete (markdown files first; DB only if ever needed). |
-| 3 | **Static tokens** | `{{clipboard}}`, `{{date}}`, `{{cursor}}` (cursor is B-path-precise; see DESIGN). |
-| 4 | **`{{ask:label}}`** | Palette expands inline into a tiny fill-in field instead of paste-and-close. |
-| 5 | **Inverse capture** | Select text anywhere → hotkey → minimal "save as prompt" sheet, pre-filled. |
-| 6 | **Frecency + search** | Usage-ranked ordering; FTS only once the library is large. |
-| 7 | **Adaptive ⌥1–9 row** | A heads-up display, not a menu: fixed positions, content reorders by app/time. |
+| # | Stage | One-line intent | Stage file |
+|---|-------|-----------------|------------|
+| 0 | **Spike** | Prove the paste loop in `PasteProbe.swift` across 5 targets. **Gate.** | [STAGE-0](stages/STAGE-0-spike.md) |
+| 1 | **MVP palette** | ⌥Space → nonactivating panel → fuzzy filter → ↵ paste. Markdown-file prompts + live-reload. | [STAGE-1](stages/STAGE-1-mvp-palette.md) |
+| 2 | **Prompt store + CRUD** | In-app add/edit/delete (markdown files first; DB only if ever needed). | [STAGE-2](stages/STAGE-2-prompt-store-crud.md) |
+| 3 | **Static tokens** | `{{clipboard}}`, `{{date}}`, `{{cursor}}` (cursor is B-path-precise; see DESIGN). | [STAGE-3](stages/STAGE-3-static-tokens.md) |
+| 4 | **`{{ask:label}}`** | Palette expands inline into a tiny fill-in field instead of paste-and-close. | [STAGE-4](stages/STAGE-4-ask-inline-expansion.md) |
+| 5 | **Inverse capture** | Select text anywhere → hotkey → minimal "save as prompt" sheet, pre-filled. | [STAGE-5](stages/STAGE-5-inverse-capture.md) |
+| 6 | **Frecency + search** | Usage-ranked ordering; FTS only once the library is large. | [STAGE-6](stages/STAGE-6-frecency-search.md) |
+| 7 | **Adaptive ⌥1–9 row** | A heads-up display, not a menu: fixed positions, content reorders by app/time. | [STAGE-7](stages/STAGE-7-adaptive-hud-row.md) |
 
-Each stage's exit criterion authorizes the next; see [TASKS.md](TASKS.md).
+Each stage's exit criterion authorizes the next; see [TASKS.md](TASKS.md). The full feature
+universe (incl. candidates + non-goals) is indexed in [FEATURE-CATALOG.md](FEATURE-CATALOG.md);
+how to build each stage with subagents is in [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md).
 
 ## 9. Validation provenance
 

@@ -1,7 +1,7 @@
 # FEATURES — UX & Interaction Spec
 
 **Depth:** MVP specified deeply; stages 3–7 at tiered depth (intent + key decisions).
-Sibling docs: [PRD.md](PRD.md) · [DESIGN.md](DESIGN.md) · [TASKS.md](TASKS.md)
+Sibling docs: [PRD.md](PRD.md) · [DESIGN.md](DESIGN.md) · [TASKS.md](TASKS.md) · [FEATURE-CATALOG.md](FEATURE-CATALOG.md) · [stages/](stages/) · [AGENT-WORKFLOW.md](AGENT-WORKFLOW.md)
 
 The governing rule for every decision below: **make "what will ↵ do right now" legible at a
 peripheral glance in under 100ms.** That legibility is what lets the hand stop looking — it is
@@ -9,46 +9,110 @@ the whole game.
 
 ---
 
+## 0. Visual system — Mattmode Mono
+
+Chosen via `/design-shotgun` (2026-06-19) over a native-macOS direction and a hybrid. A
+developer's command palette in the Cursor/Grok register: **opaque, monochrome, mono type, dark
+only.** No translucency, no color. Approved reference render + comparison board live in-repo at
+[`docs/design/`](design/) — [`variant-B.html`](design/variant-B.html) is the canonical mockup
+(provenance: `/design-shotgun` output originally at
+`~/.gstack/projects/MattModeCode-ai-prompt-shortcut-app/designs/main-palette-20260619/`). Build values:
+
+| Role | Value |
+|------|-------|
+| Backdrop | `#0a0a0f` |
+| Panel surface (opaque) | `#0f0f14` |
+| Primary text | `#e2e8f0` · dimmed (unselected title) `#b8c0cc` |
+| Secondary / snippet | `#94a3b8` |
+| Footer / hint | `#64748b` |
+| Selected-row fill | `rgba(226,232,240,0.10)` |
+| Selected-row left bar | `rgba(226,232,240,0.55)`, 2px |
+| Matched character | `#ffffff`, weight 600 |
+| Font | **JetBrains Mono** (bundled; falls back to `.monospacedSystemFont`) |
+| Corner radius | 6px · **no border** · shadow `0 24px 60px rgba(0,0,0,0.6)` |
+
+---
+
 ## 1. Palette anatomy (MVP)
 
 A single centered, nonactivating panel floating above the host app. It never steals focus.
 
-- **Width:** ~560–640pt. **Corner radius:** ~12pt. **Background:** vibrancy/HUD material
-  (`.hudWindow` or `.popover`), subtle 1px border + soft shadow so it reads as floating.
+- **Width:** ~560pt. **Corner radius:** 6px. **Background:** flat **opaque `#0f0f14`** (deliberately
+  *not* vibrancy/HUD material), **no border**, soft drop shadow `0 24px 60px rgba(0,0,0,0.6)` so it
+  reads as floating. Dark only.
 - **Position:** horizontally centered; vertically ~30–35% from the top (above true center,
-  where the eye rests). **The input never moves; results grow downward only.** Spatial
-  stability is what the hand learns.
-- **Search field:** single line, ~17–18pt regular, generous padding (~12pt), no visible label,
-  placeholder "Search prompts…".
-- **Results list:** up to ~6 rows visible, each ~36–40pt tall.
+  where the eye rests). **The input never moves.** Spatial stability is what the hand learns.
+  On **multi-monitor** setups the panel appears on the **display holding the captured frontmost
+  app's key window** (derived at present-time from the capture snapshot — see DESIGN invariant 4;
+  the screen is part of what `capture-before-present` snapshots), centered there, so it shows up
+  where you are already working. Falls back to the main display if the captured app's screen
+  can't be resolved.
+- **Search field:** single line, ~14pt JetBrains Mono, generous padding, no visible label,
+  primary text `#e2e8f0`, thin 1.5px caret, placeholder "Search prompts…".
+- **Results list:** up to 6 rows visible (each ~38pt tall) in a **fixed-height viewport**. With
+  >6 matches, ↓ scrolls the selection through the full list — the panel's height stays fixed and
+  the inner content slides under the viewport, with a thin scroll hint at the trailing edge.
+  ↑/↓ **clamp at the true ends of the full match list** (not the visible 6) and never wrap.
+  Default state (recents) scrolls the same way when it exceeds 6.
 
 ### Row design — one prompt per row, title-forward
 
-- **Title** in semibold (~15pt), primary.
-- One-line **muted preview/snippet** (~12pt secondary) below or trailing.
-- Fuzzy-matched characters in the title are **bold + accent-weighted** (weight + color, *not* a
-  background swatch — swatches add noise).
-- A trailing **⌥-number chip** slot is *designed-for but empty* in MVP (it fills in stage 7).
+- **Title** in JetBrains Mono ~13pt, weight 500, `#e2e8f0` (dimmed to `#b8c0cc` when unselected).
+- One-line **muted preview/snippet** (~12pt, `#94a3b8`) trailing, ellipsis-truncated.
+- Fuzzy-matched characters in the title go **brighter pure-white + heavier weight** (`#ffffff`,
+  weight 600) — weight + brightness, *not* a background swatch and *not* a colored accent
+  (swatches add noise; this design has no color).
+- **Truncation:** title has priority — the muted snippet truncates first (ellipsis), and only if
+  the title alone would overflow ~560pt does the title itself ellipsis. A title min-width keeps it
+  always readable; the snippet yields the space.
+- **⌥-number chip:** MVP **collapses** the chip column — title + snippet use the full row width.
+  Stage 7 reflows the row to introduce the trailing ⌥-number column when chips actually exist
+  (a one-time geometry change, called out here so it's expected, not a surprise reshuffle).
 - No decorative icons in MVP.
 
 ### The selected row — unmistakable (this is the whole game)
 
-The selected row (the one ↵ fires) gets a **full accent-tinted fill** (system accent ~15–20%
-opacity) with its title at full strength; every other row sits quieter. The **first match is
-auto-selected on every keystroke.** ↑/↓ move the selection and **clamp** at the ends (no
+The selected row (the one ↵ fires) gets a **faint white/silver fill** (`rgba(226,232,240,0.10)`)
+**plus a 2px silver left-edge bar** (`rgba(226,232,240,0.55)`), title at full `#e2e8f0` strength;
+every other row sits quieter. No system-accent-blue tint — the marker is monochrome. The **first
+match is auto-selected on every keystroke.** ↑/↓ move the selection and **clamp** at the ends (no
 wrapping — wrapping disorients fast typists). The contrast between selected and unselected must
-read in a peripheral glance.
+read in a peripheral glance — the **2px left-edge bar is the primary selection signal** (it carries
+the glance); the fill is reinforcement. Validate both against
+[`variant-B.html`](design/variant-B.html) at arm's length / with a squint: if the selection doesn't
+read at a glance, strengthen the bar before the fill. Under **Increase Contrast** (§9), strengthen both.
 
 ---
 
-## 2. The four MVP states
+## 2. The five MVP states
+
+The keyboard footer (`↑/↓ move · ↵ paste · esc dismiss`) is **persistent across States
+A0/A/B/C** — it is the wayfinding for an unsure hand, not a State-A-only flourish. Only State D
+(the commit fade) drops it.
+
+### State A0 — Empty library (no prompts on disk)
+
+Distinct from State C: A0 means the library itself is empty (a fresh install before seeding, or the
+`~/Prompts/` folder emptied), not that a query found nothing. One warm line that points at the fix
+instead of a cold "No items found" — the menu-bar **"Open prompts folder…"** is the action.
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Search prompts…                                          │
+├──────────────────────────────────────────────────────────┤
+│              No prompts yet.                               │
+│       Drop a .md file in ~/Prompts to begin →             │
+└──────────────────────────────────────────────────────────┘
+        ↑/↓ move · ↵ paste · esc dismiss
+```
 
 ### State A — Default (just opened, nothing typed)
 
 Shows the **top ~6 most-recently-used prompts immediately**, so ⌥Space-then-↵ does something useful.
 Top row auto-selected. (MVP ranks by a simple last-used timestamp; usage-weighted *frecency* scoring
 is Stage 6 — the empty state needs only recency, not the ranking engine. On a cold first launch with no
-history, this falls back to seed order.)
+history, this falls back to seed order.) When recents exceed 6, the list scrolls (see §1 — fixed
+viewport, ↓ scrolls).
 
 ```
 ┌──────────────────────────────────────────────────────────┐
@@ -93,8 +157,9 @@ Field has text, zero results. A single quiet centered line — **never** an erro
 
 ### State D — Commit (↵ → paste → fade)
 
-On ↵: the selected row gives one fast confirmation cue (~80ms accent-fill pulse / micro-flash),
-then the **whole panel** fades out in ~120ms with a tiny scale-down (0.98) — no slide, no bounce.
+On ↵: the selected row gives one fast confirmation cue (~80ms brightness pulse — lift the fill
+toward `rgba(226,232,240,0.12)`), then the **whole panel** fades out in ~120ms with a tiny
+scale-down (0.98) — no slide, no bounce.
 The paste fires *during/under* the fade, so the assembled text appears in the host app as the
 palette clears, making the two feel causally linked ("I pressed, it went there").
 
@@ -109,6 +174,11 @@ palette clears, making the two feel causally linked ("I pressed, it went there")
 **Open vs close asymmetry:** opening is faster and flatter (~80–100ms fade-in, no scale) —
 appearing must feel *instant*; disappearing can have one frame of grace. **Esc** dismisses with
 the same fade but no pulse and no paste.
+
+**Reduce Motion:** under `accessibilityDisplayShouldReduceMotion` the ~80ms pulse + ~120ms fade +
+0.98 scale collapse to an instant dismiss (or a short opacity-only crossfade) — no scale, no pulse.
+The paste still fires; only the choreography is dropped. The ~700ms feel is about latency, not
+animation, so dropping the motion never delays the paste.
 
 ---
 
@@ -137,10 +207,10 @@ so the very first reflex is always *meaningful* (it either pastes, or explains w
 
 ```
 ┌────────────────────────────────────────────┐
-│            Prompt Palette                   │
+│                  Promptly                   │
 │                                             │
-│  To type prompts into other apps, Prompt    │
-│  Palette needs Accessibility access.        │
+│  To type prompts into other apps, Promptly  │
+│  needs Accessibility access.                │
 │                                             │
 │  It never reads your screen, and your       │
 │  clipboard is always restored.              │
@@ -149,13 +219,19 @@ so the very first reflex is always *meaningful* (it either pastes, or explains w
 └────────────────────────────────────────────┘
 ```
 
-- One sentence of *why*, one primary button that deep-links to the Accessibility pane
-  (`x-apple.systempreferences:` URL), one tiny trust line. No carousel, no account, no tour.
+- One sentence of *why*, one **ghost button** ("Open System Settings →" — transparent bg,
+  `1px rgba(226,232,240,0.25)` border, `#e2e8f0` text, hover fill `rgba(226,232,240,0.06)`) that
+  deep-links to the Accessibility pane (`x-apple.systempreferences:` URL), one tiny trust line.
+  Same `#0f0f14` / JetBrains Mono surface as the palette. No carousel, no account, no tour.
 - After granting, the app detects the change (re-check on next hotkey / poll `AXIsProcessTrusted`)
   and quietly becomes ready — ideally without a manual relaunch; if relaunch is unavoidable, that
   one line says so.
 - The **menu-bar icon carries a subtle "not yet permitted" state** (dimmed/badged) as the
   persistent, non-nagging reminder.
+- **Focus:** this window is the **one** surface allowed to activate / take focus — at first grant
+  the user isn't mid-task, so the never-steal-focus discipline is suspended here and only here.
+  While ungranted, each permission-less ⌥Space **re-opens this same window** (a single instance,
+  never stacks); the dimmed menu-bar icon carries the reminder between attempts.
 
 ---
 
@@ -165,7 +241,7 @@ No settings *window*. The menu-bar item's dropdown holds exactly the few real co
 "quiet and observant" for behavior while refusing to be a black box you can't recover from:
 
 ```
-  Prompt Palette
+  Promptly
   ─────────────────────────────
   Accessibility: ✓ Granted          (or: ⚠ Not granted — Fix…)
   Hotkey: ⌥Space            Rebind…
@@ -236,3 +312,28 @@ opens. Shown as a thin persistent strip, numerals dominant.
 Mockups in this doc are **ASCII/Markdown only** — they live in git, stay diffable, cost nothing
 to author, and double as the solo build checklist. We mock the **four MVP states + the commit
 flow + the stage-4 transform**; later stages get intent prose, not full pixel specs.
+
+The one pixel-accurate render is the approved `/design-shotgun` output (§0):
+[`docs/design/variant-B.html`](design/variant-B.html), committed in-repo (provenance:
+`~/.gstack/projects/MattModeCode-ai-prompt-shortcut-app/designs/main-palette-20260619/`). Treat it
+as the visual source of truth for the palette; the ASCII states above show layout/behavior, the
+render shows the look.
+
+---
+
+## 9. Accessibility of the palette itself
+
+The app is built on the Accessibility *API*; the palette must also *be* accessible. Three system
+settings to honor (all are read-once-at-present, cheap):
+
+- **Reduce Motion** (`accessibilityDisplayShouldReduceMotion`) — the commit choreography collapses
+  to instant / opacity-only; the paste is never delayed (§2 State D).
+- **Increase Contrast** (`accessibilityDisplayShouldIncreaseContrast`) — strengthen the selection
+  bar and fill so the "whole game" peripheral signal survives a higher-contrast environment; the
+  footer/snippet dim values lift toward their primary-text neighbors.
+- **VoiceOver** — each row exposes an accessibility label like "`<name>`, `<snippet>`, prompt" and
+  the selected row is announced on ↑/↓; the search field is labeled "Search prompts." The palette
+  is already keyboard-first, so every affordance is reachable by the documented keys (§6) — there is
+  nothing mouse-only to make accessible.
+
+This section governs the colors/motion in §0–§2; where they conflict, the accessibility setting wins.
