@@ -8,14 +8,16 @@ A native macOS (Swift / AppKit) menu-bar prompt launcher. Hit ⌥Space in any te
 
 ## Repository Structure
 
-Pre-scaffold — only docs exist so far. Everything below the line is **planned, not yet created**.
+Pre-scaffold — only docs + the spike exist so far. Everything below the line is **planned, not yet created**.
 
 ```
 CLAUDE.md          # this file
-README.md          # short project blurb
+README.md          # pitch (user-facing) + dev status/run/docs-map
+docs/              # full spec suite: PRD, FEATURES, DESIGN, TASKS
+PasteProbe.swift   # spike: prove the paste loop before any app code (Gate 0)
 ─────────────────  # planned ↓
-PasteProbe.swift   # spike: prove the paste loop before any app code (Step 1)
-<AppTarget>/       # Xcode menu-bar app, built after the spike is green (Step 2)
+run.sh             # the whole dev loop: build x86_64 → install → relaunch → tail log
+<AppTarget>/       # Xcode menu-bar app, built after the spike is 5/5 green
 ```
 
 ## Essential Commands
@@ -57,12 +59,17 @@ The staged roadmap (tokens, capture hotkey, frecency, adaptive cards) lives in t
 ## Things That Will Bite You
 
 - Both paste paths need **Accessibility** permission — a silent-failure point. Check `AXIsProcessTrustedWithOptions` and surface a clear first-run state.
+- **A rebuild can silently revoke Accessibility** (TCC keys on signature + bundle ID + path), which looks exactly like "the paste loop broke." Mitigate with stable `PRODUCT_BUNDLE_IDENTIFIER` + ad-hoc signing (`CODE_SIGN_IDENTITY="-"`) + a fixed install path, all baked into `run.sh`. Escape hatch: `tccutil reset Accessibility <bundle-id>`. The spike grants Terminal; the app grants the bundle — the grant does **not** transfer.
+- An AX `set` returning `.success` does **not** mean text landed (Electron/WebKit shims no-op silently). **Verify by read-back**, not by return code.
 - Capture `NSWorkspace.frontmostApplication` **before** showing the panel, or you paste into your own panel.
-- `NSEvent` global monitors can't consume the event; Carbon `RegisterEventHotKey` can. Pick deliberately.
+- `NSEvent` global monitors can't consume the event; Carbon `RegisterEventHotKey` can. Pick deliberately (Carbon is the decided mechanism).
 
 ## Deeper Context
 
-For the full vision, staged roadmap, and spike spec, see:
+Specs live in `docs/`: **PRD** (product/feeling/non-goals), **FEATURES** (UX + ASCII mockups),
+**DESIGN** (technical: paste service, hotkey, permissions, modules), **TASKS** (gated checklist).
+
+For the full original vision, staged roadmap, and spike spec, see:
 `~/.gstack/projects/MattModeCode-ai-prompt-shortcut-app/mc-main-design-20260618-225221.md`
 
 ## How to Operate
