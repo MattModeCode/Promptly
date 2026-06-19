@@ -29,28 +29,31 @@ private let kSeparatorHeight: CGFloat = 1
 private let kMaxRows = 6
 private let kPanelWidth: CGFloat = 560
 
-// MARK: - Filter field (key interception)
+// MARK: - Key-capable panel
 
+/// A borderless `NSWindow`/`NSPanel` cannot become key by default, which would
+/// leave the search field unable to receive keystrokes. Override so the
+/// nonactivating panel can take key focus (it never becomes *main*, preserving
+/// the never-steal-focus behavior).
+final class PalettePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+}
+
+// MARK: - Filter field
+
+/// `⌘E` (edit selected) isn't a field-editor command selector, so it can't be
+/// caught via `doCommandBy:` like Esc/Return/arrows. Intercept it here at the
+/// key-equivalent layer; everything else is handled by the delegate.
 final class FilterField: NSTextField {
-    var onUp: (() -> Void)?
-    var onDown: (() -> Void)?
-    var onReturn: (() -> Void)?
-    var onEscape: (() -> Void)?
-    var onDeleteWhenEmpty: (() -> Void)?
     var onEdit: (() -> Void)?
 
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 126: onUp?()        // ↑
-        case 125: onDown?()      // ↓
-        case 36:  onReturn?()    // ↵
-        case 53:  onEscape?()    // esc
-        case 51:                 // ⌫ backspace — delete selected when filter is empty
-            if stringValue.isEmpty { onDeleteWhenEmpty?() } else { super.keyDown(with: event) }
-        case 14 where event.modifierFlags.contains(.command): // ⌘E — edit selected
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "e" {
             onEdit?()
-        default:  super.keyDown(with: event)
+            return true
         }
+        return super.performKeyEquivalent(with: event)
     }
 }
 
@@ -140,6 +143,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var filterField: FilterField!
     private var separator: NSBox!
     private var scrollView: NSScrollView!
+    private var scrollHeightConstraint: NSLayoutConstraint!
     private var tableView: NSTableView!
     private var emptyLabel: NSTextField!
     private var footerLabel: NSTextField!
@@ -157,7 +161,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // MARK: Build
 
     private func buildPanel() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: kPanelWidth, height: 300),
+        panel = PalettePanel(contentRect: NSRect(x: 0, y: 0, width: kPanelWidth, height: 300),
             styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
             backing: .buffered, defer: false)
         panel.level = .floating
@@ -174,6 +178,10 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         content.layer?.cornerRadius = 10
         content.layer?.masksToBounds = true
         panel.contentView = content
+        // A manually-assigned contentView on a borderless panel must explicitly
+        // track the window frame, or Auto Layout collapses the flexible scroll
+        // view (the cramped-panel bug).
+        content.autoresizingMask = [.width, .height]
 
         // Filter field
         filterField = FilterField(frame: .zero)
@@ -188,11 +196,6 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             string: "Search prompts…",
             attributes: [.font: Palette.mono(14), .foregroundColor: Palette.footer])
         filterField.delegate = self
-        filterField.onUp = { [weak self] in self?.moveSelection(-1) }
-        filterField.onDown = { [weak self] in self?.moveSelection(1) }
-        filterField.onReturn = { [weak self] in self?.commitSelected() }
-        filterField.onEscape = { [weak self] in self?.dismiss() }
-        filterField.onDeleteWhenEmpty = { [weak self] in self?.confirmDeleteSelected() }
         filterField.onEdit = { [weak self] in
             guard let self, let p = selectedPrompt else { return }
             onEdit?(p)
@@ -248,7 +251,14 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         footerLabel.isBordered = false
         content.addSubview(footerLabel)
 
+        // Pin the list height explicitly so Auto Layout can never squeeze it to
+        // zero. Updated per state in `applyState()`.
+        scrollHeightConstraint = scrollView.heightAnchor.constraint(
+            equalToConstant: CGFloat(kMaxRows) * kRowHeight)
+
         NSLayoutConstraint.activate([
+            scrollHeightConstraint,
+
             filterField.topAnchor.constraint(equalTo: content.topAnchor),
             filterField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
             filterField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
@@ -345,6 +355,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 tableView.scrollRowToVisible(selectedIndex)
             }
         }
+        scrollHeightConstraint.constant = listHeight()
         resizePanel()
     }
 
@@ -354,14 +365,16 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         scrollView.isHidden = true
     }
 
-    private func panelHeight() -> CGFloat {
-        let rowsArea: CGFloat
+    /// Height of the list/empty-message area between the separator and footer.
+    private func listHeight() -> CGFloat {
         if promptStore.prompts.isEmpty || results.isEmpty {
-            rowsArea = kRowHeight   // one line for the empty/no-match message
-        } else {
-            rowsArea = CGFloat(min(results.count, kMaxRows)) * kRowHeight
+            return kRowHeight   // one line for the empty/no-match message
         }
-        return kFilterHeight + kSeparatorHeight + rowsArea + kFooterHeight
+        return CGFloat(min(results.count, kMaxRows)) * kRowHeight
+    }
+
+    private func panelHeight() -> CGFloat {
+        kFilterHeight + kSeparatorHeight + listHeight() + kFooterHeight
     }
 
     private func resizePanel() {
@@ -441,6 +454,35 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     func controlTextDidChange(_ obj: Notification) {
         refreshResults()
+    }
+
+    /// While the search field is being edited the field editor (a shared
+    /// `NSTextView`) is first responder and consumes Esc/Return/arrows/⌫ before
+    /// they reach the field's `keyDown` — so they must be intercepted here.
+    func control(_ control: NSControl, textView: NSTextView,
+                 doCommandBy commandSelector: Selector) -> Bool {
+        switch commandSelector {
+        case #selector(NSResponder.cancelOperation(_:)):   // esc
+            dismiss()
+            return true
+        case #selector(NSResponder.insertNewline(_:)):      // ↵
+            commitSelected()
+            return true
+        case #selector(NSResponder.moveUp(_:)):             // ↑
+            moveSelection(-1)
+            return true
+        case #selector(NSResponder.moveDown(_:)):           // ↓
+            moveSelection(1)
+            return true
+        case #selector(NSResponder.deleteBackward(_:)):     // ⌫ — delete selected when empty
+            if textView.string.isEmpty {
+                confirmDeleteSelected()
+                return true
+            }
+            return false
+        default:
+            return false
+        }
     }
 
     // MARK: NSTableViewDataSource / Delegate
