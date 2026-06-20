@@ -144,7 +144,8 @@ latency is *actually* felt (premature at <80 prompts).
 **Exit criterion:** the row's positions are stable within an interaction and you trust ⌥3 to be ⌥3;
 content adapts only between opens.
 
-- [ ] Fixed 9 positions, content reorders by app/time, **no live reshuffle** (FEATURES §7).
+- [x] Fixed 9 positions, content reorders between opens, **no live reshuffle** — assignment frozen at present-time; ⌥1–9 fire the frozen slot; trailing ⌥-number chips on the resting top-9 rows (FEATURES §7).
+- [ ] **Manual verification (author / Tier B):** confirm ⌥3 fires the same prompt for the whole time the row is up, and re-sorting only happens between opens.
 
 ---
 

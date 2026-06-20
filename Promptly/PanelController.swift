@@ -46,11 +46,21 @@ final class PalettePanel: NSPanel {
 /// key-equivalent layer; everything else is handled by the delegate.
 final class FilterField: NSTextField {
     var onEdit: (() -> Void)?
+    /// ⌥1–9 — fire the prompt frozen at that HUD slot (Stage 7). Intercepted here, before the
+    /// field editor would insert the option-modified character.
+    var onHudSelect: ((Int) -> Void)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command),
            event.charactersIgnoringModifiers?.lowercased() == "e" {
             onEdit?()
+            return true
+        }
+        if event.modifierFlags.contains(.option),
+           !event.modifierFlags.contains(.command),
+           let chars = event.charactersIgnoringModifiers, chars.count == 1,
+           let digit = Int(chars), (1...9).contains(digit) {
+            onHudSelect?(digit)
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -77,6 +87,9 @@ final class PromptRowView: NSTableRowView {
 
 private final class PromptCellView: NSTableCellView {
     let label = NSTextField(labelWithString: "")
+    // Stage 7: trailing ⌥-number chip for the resting top-9 rows. Empty (zero-width) otherwise,
+    // so a filtered row's title reclaims the full width.
+    let slotLabel = NSTextField(labelWithString: "")
     init() {
         super.init(frame: .zero)
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -85,16 +98,28 @@ private final class PromptCellView: NSTableCellView {
         label.backgroundColor = .clear
         label.isBordered = false
         label.lineBreakMode = .byTruncatingTail
+        slotLabel.translatesAutoresizingMaskIntoConstraints = false
+        slotLabel.font = Palette.mono(11)
+        slotLabel.textColor = Palette.footer
+        slotLabel.backgroundColor = .clear
+        slotLabel.isBordered = false
+        slotLabel.alignment = .right
+        slotLabel.setContentHuggingPriority(.required, for: .horizontal)
+        slotLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(label)
+        addSubview(slotLabel)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            slotLabel.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
+            slotLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            slotLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, query: String) {
+    func configure(name: String, query: String, slot: Int?) {
+        slotLabel.stringValue = slot.map { "⌥\($0)" } ?? ""
         if query.isEmpty {
             label.attributedStringValue = NSAttributedString(
                 string: name,
@@ -161,6 +186,11 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var askPrompt: Prompt?
     private var isAsking: Bool { askFlow != nil }
 
+    // Stage 7: ⌥1–9 slot → prompt, FROZEN at present-time and held until dismiss (no live
+    // reshuffle — FEATURES §7). ⌥3 fires the same prompt for the whole appearance, even while
+    // the filter changes the visible rows.
+    private var hudAssignment: [Int: Prompt] = [:]
+
     private static let browseFooter = "↑/↓ move · ↵ paste · ⌫ delete · ⌘E edit · esc dismiss"
     private static let askFooter    = "↵ / ⇥ next · esc cancel"
 
@@ -211,6 +241,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             guard let self, let p = selectedPrompt else { return }
             onEdit?(p)
         }
+        filterField.onHudSelect = { [weak self] n in self?.hudSelect(n) }
         content.addSubview(filterField)
 
         // Separator
@@ -307,6 +338,9 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         restoreBrowseChrome()
         filterField.stringValue = ""
         refreshResults()
+        // Freeze the ⌥1–9 assignment for this appearance (Stage 7) — from the same ranked list
+        // the resting (empty-query) rows show, so the chips match the keys.
+        hudAssignment = HudRow.assign(promptStore.ranked())
 
         let screen = captured.screen
         let h = panelHeight()
@@ -431,8 +465,19 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             dismiss()
             return
         }
-        let prompt = results[selectedIndex]
-        // Stage 4: a prompt with {{ask:…}} transforms the palette in place instead of pasting.
+        commit(results[selectedIndex])
+    }
+
+    /// ⌥N — fire the prompt frozen at HUD slot N (Stage 7). Honors the freeze: works against the
+    /// at-present-time assignment regardless of the current filter, and is inert during ask mode.
+    private func hudSelect(_ n: Int) {
+        guard !committing, !isAsking, let prompt = hudAssignment[n] else { return }
+        commit(prompt)
+    }
+
+    /// Shared commit decision: a prompt with {{ask:…}} transforms the palette in place (Stage 4);
+    /// otherwise it pastes (State D).
+    private func commit(_ prompt: Prompt) {
         if let flow = AskFlow(body: prompt.body) {
             enterAskMode(prompt: prompt, flow: flow)
             return
@@ -590,7 +635,10 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return c
         }()
         let prompt = results[row]
-        cell.configure(name: prompt.name, query: query)
+        // Chips only in the resting (empty-query) state, where the visible rows are the ranked
+        // list and so line up with the frozen ⌥1–9 assignment.
+        let slot: Int? = (query.isEmpty && row < HudRow.slotCount) ? row + 1 : nil
+        cell.configure(name: prompt.name, query: query, slot: slot)
         return cell
     }
 
