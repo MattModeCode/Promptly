@@ -48,6 +48,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelController.present(captured: captured)
     }
 
+    /// Menu-bar "Recent prompts…" (Feature #4) — a secondary discovery affordance for opening
+    /// straight into history mode. Best-effort: it captures whatever app is frontmost AT CLICK
+    /// TIME, which may not be the app the user actually wants to paste into if they clicked the
+    /// menu bar itself first. The in-palette ⌘R (after a normal ⌥Space) is the robust path —
+    /// this is a convenience, not a replacement for it.
+    @objc private func openRecentPrompts() {
+        guard AXIsProcessTrusted() else {
+            showAccessibilityWindow()
+            return
+        }
+        guard let captured = Capture.captureFrontmostApp() else { return }
+        panelController.presentHistory(captured: captured)
+    }
+
     /// ⌥⇧Space — inverse capture (Stage 5). Read the selection from the host app FIRST (while
     /// it is still frontmost), then open a pre-filled "save as prompt" sheet.
     private func onCaptureHotkey() {
@@ -101,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(axItem)
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Hotkey: ⌥Space    Rebind…", action: #selector(rebindHotkey), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Recent prompts…", action: #selector(openRecentPrompts), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "New Prompt…", action: #selector(newPrompt), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open prompts folder…", action: #selector(openPromptsFolder), keyEquivalent: ""))
