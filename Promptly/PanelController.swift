@@ -44,7 +44,38 @@ final class PalettePanel: NSPanel {
 /// `⌘E` (edit selected) isn't a field-editor command selector, so it can't be
 /// caught via `doCommandBy:` like Esc/Return/arrows. Intercept it here at the
 /// key-equivalent layer; everything else is handled by the delegate.
+/// Vertically centers text/placeholder within the tall filter field, instead of
+/// the default top-aligned baseline.
+final class VCenterTextFieldCell: NSTextFieldCell {
+    private func centered(_ rect: NSRect) -> NSRect {
+        let textSize = cellSize(forBounds: rect)
+        let dy = (rect.height - textSize.height) / 2
+        guard dy > 0 else { return rect }
+        var r = rect
+        r.origin.y += dy
+        r.size.height -= dy
+        return r
+    }
+
+    override func drawInterior(withFrame cellFrame: NSRect, in controlView: NSView) {
+        super.drawInterior(withFrame: centered(cellFrame), in: controlView)
+    }
+
+    override func edit(withFrame rect: NSRect, in controlView: NSView, editor: NSText, delegate: Any?, event: NSEvent?) {
+        super.edit(withFrame: centered(rect), in: controlView, editor: editor, delegate: delegate, event: event)
+    }
+
+    override func select(withFrame rect: NSRect, in controlView: NSView, editor: NSText, delegate: Any?, start: Int, length: Int) {
+        super.select(withFrame: centered(rect), in: controlView, editor: editor, delegate: delegate, start: start, length: length)
+    }
+}
+
 final class FilterField: NSTextField {
+    override class var cellClass: AnyClass? {
+        get { VCenterTextFieldCell.self }
+        set { }
+    }
+
     var onEdit: (() -> Void)?
     /// ⌥1–9 — fire the prompt frozen at that HUD slot (Stage 7). Intercepted here, before the
     /// field editor would insert the option-modified character.
