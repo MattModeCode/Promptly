@@ -57,6 +57,51 @@ func test_malformed_rejected() {
     check(PromptStore.parse("---\nkeywords: [x]\n---\nbody", filename: "c.md") == nil, "missing name → nil")
 }
 
+// ---------------------------------------------------------------------------
+// Stage 6 — frecency ranking (pure functions; no store/DB).
+// ---------------------------------------------------------------------------
+
+private func prompt(_ name: String, _ file: String) -> Prompt {
+    Prompt(name: name, keywords: [], body: "", filename: file)
+}
+
+func test_frecency_score_basics() {
+    print("\nTest — frecencyScore: unused scores 0; recency and frequency both raise it:")
+    let now = Date(timeIntervalSince1970: 1_000_000_000)
+    check(PromptStore.frecencyScore(count: 0, lastUsed: now, now: now) == 0, "count 0 → score 0")
+
+    let hourAgo = now.addingTimeInterval(-3600)
+    let weekAgo = now.addingTimeInterval(-7 * 86_400)
+    let recent = PromptStore.frecencyScore(count: 3, lastUsed: hourAgo, now: now)
+    let stale  = PromptStore.frecencyScore(count: 3, lastUsed: weekAgo, now: now)
+    check(recent > stale, "same count, more recent → higher (\(recent) > \(stale))")
+
+    let many = PromptStore.frecencyScore(count: 10, lastUsed: hourAgo, now: now)
+    check(many > recent, "same recency, higher count → higher (\(many) > \(recent))")
+}
+
+func test_rank_orders_by_frecency() {
+    print("\nTest — rank orders by frecency:")
+    let now = Date(timeIntervalSince1970: 1_000_000_000)
+    let ps = [prompt("A", "a.md"), prompt("B", "b.md"), prompt("C", "c.md")]
+    let usage: [String: PromptUsage] = [
+        "a.md": PromptUsage(count: 2, lastUsed: now.addingTimeInterval(-30 * 86_400)),  // old, few
+        "b.md": PromptUsage(count: 5, lastUsed: now.addingTimeInterval(-3600)),         // recent, many
+        // c.md unused
+    ]
+    let order = PromptStore.rank(ps, usage: usage, now: now).map { $0.name }
+    check(order.first == "B", "most recent+frequent ranks first (got \(order))")
+    check(order.last == "C", "unused ranks last (got \(order))")
+}
+
+func test_rank_cold_start_keeps_seed_order() {
+    print("\nTest — empty usage degrades to loaded (seed) order, stably:")
+    let now = Date(timeIntervalSince1970: 1_000_000_000)
+    let ps = [prompt("first", "1.md"), prompt("second", "2.md"), prompt("third", "3.md")]
+    let order = PromptStore.rank(ps, usage: [:], now: now).map { $0.name }
+    check(order == ["first", "second", "third"], "cold start preserves load order (got \(order))")
+}
+
 @main
 enum TestMain {
     static func main() {
@@ -64,10 +109,14 @@ enum TestMain {
         test_multiline_and_tokens()
         test_capture_like_payload()
         test_malformed_rejected()
+        test_frecency_score_basics()
+        test_rank_orders_by_frecency()
+        test_rank_cold_start_keeps_seed_order()
 
-        print("\n=== Stage 5 Tier A Results ===")
+        print("\n=== Stage 5 + 6 Tier A Results ===")
         print("\(passed) passed, \(failed) failed")
-        print("Tier run: A (autonomous, pure serialize/parse). Tier B (capture in a real app) is the author's.")
+        print("Tier run: A (autonomous; pure serialize/parse + frecency). Tier B (capture in a")
+        print("real app; a week of use confirming ordering) is the author's.")
         exit(failed == 0 ? 0 : 1)
     }
 }

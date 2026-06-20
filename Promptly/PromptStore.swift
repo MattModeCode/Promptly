@@ -8,11 +8,17 @@ struct Prompt: Equatable {
     let filename: String
 }
 
+/// Per-prompt usage for frecency ranking (Stage 6): how often and how recently it was used.
+struct PromptUsage: Codable, Equatable {
+    var count: Int
+    var lastUsed: Date
+}
+
 final class PromptStore {
     static let promptsDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Prompts")
 
     private(set) var prompts: [Prompt] = []
-    private var lastUsed: [String: Date] = [:]
+    private var usage: [String: PromptUsage] = [:]
     private var fsSource: DispatchSourceFileSystemObject?
     private var dirFD: Int32 = -1
     private let defaults = UserDefaults(suiteName: "com.promptly.app")
@@ -43,14 +49,18 @@ final class PromptStore {
         }
         prompts = loaded
 
-        // Restore lastUsed
-        if let stored = defaults?.dictionary(forKey: "lastUsed") as? [String: Double] {
-            lastUsed = stored.mapValues { Date(timeIntervalSince1970: $0) }
+        // Restore usage. Prefer the Stage-6 frecency store; migrate the Stage-1 recency dict
+        // (a bare last-used timestamp) to count=1 if that's all we have.
+        if let data = defaults?.data(forKey: "usage"),
+           let decoded = try? JSONDecoder().decode([String: PromptUsage].self, from: data) {
+            usage = decoded
+        } else if let stored = defaults?.dictionary(forKey: "lastUsed") as? [String: Double] {
+            usage = stored.mapValues { PromptUsage(count: 1, lastUsed: Date(timeIntervalSince1970: $0)) }
         }
     }
 
     func filter(_ query: String) -> [Prompt] {
-        if query.isEmpty { return recentsSorted() }
+        if query.isEmpty { return ranked() }
         let q = query.lowercased()
         return prompts
             .compactMap { p -> (Prompt, Int)? in
@@ -64,16 +74,48 @@ final class PromptStore {
     }
 
     func recordUse(of prompt: Prompt) {
-        lastUsed[prompt.filename] = Date()
-        defaults?.set(lastUsed.mapValues { $0.timeIntervalSince1970 }, forKey: "lastUsed")
+        var u = usage[prompt.filename] ?? PromptUsage(count: 0, lastUsed: .distantPast)
+        u.count += 1
+        u.lastUsed = Date()
+        usage[prompt.filename] = u
+        persistUsage()
     }
 
-    func recentsSorted() -> [Prompt] {
-        prompts.sorted { a, b in
-            let da = lastUsed[a.filename] ?? .distantPast
-            let db = lastUsed[b.filename] ?? .distantPast
-            return da > db
-        }
+    /// Library ordered by frecency (Stage 6). Cold start / never-used prompts fall back to the
+    /// loaded (seed) order, so a fresh history is never empty (PRD §8 / Stage 6 §4).
+    func ranked(now: Date = Date()) -> [Prompt] {
+        Self.rank(prompts, usage: usage, now: now)
+    }
+
+    private func persistUsage() {
+        if let data = try? JSONEncoder().encode(usage) { defaults?.set(data, forKey: "usage") }
+    }
+
+    // MARK: - Frecency (pure, testable — Stage 6 §6)
+
+    /// Usage-weighted recency. Frequency (count) scaled by an exponential recency decay
+    /// (3-day half-life): a prompt reached for often AND recently ranks highest, a stale one
+    /// fades, and an unused prompt (count 0) scores 0. The judgment is never user-tuned
+    /// (PRD principle 2) — it just gets quietly better at predicting the next prompt.
+    static func frecencyScore(count: Int, lastUsed: Date, now: Date) -> Double {
+        guard count > 0 else { return 0 }
+        let halfLifeDays = 3.0
+        let ageDays = max(0, now.timeIntervalSince(lastUsed) / 86_400)
+        return Double(count) * pow(2.0, -ageDays / halfLifeDays)
+    }
+
+    /// Rank prompts by frecency, breaking ties by original (loaded) order so an all-unused
+    /// library degrades cleanly to seed order. Pure so the Tier A test needs no store/DB.
+    static func rank(_ prompts: [Prompt], usage: [String: PromptUsage], now: Date) -> [Prompt] {
+        prompts.enumerated()
+            .map { idx, p -> (Prompt, Double, Int) in
+                let score = usage[p.filename].map {
+                    frecencyScore(count: $0.count, lastUsed: $0.lastUsed, now: now)
+                } ?? 0
+                return (p, score, idx)
+            }
+            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.2 < $1.2 }
+            .map { $0.0 }
     }
 
     // MARK: - Mutation
@@ -96,8 +138,8 @@ final class PromptStore {
     func delete(_ prompt: Prompt) {
         let url = Self.promptsDir.appendingPathComponent(prompt.filename)
         try? FileManager.default.removeItem(at: url)
-        lastUsed.removeValue(forKey: prompt.filename)
-        defaults?.set(lastUsed.mapValues { $0.timeIntervalSince1970 }, forKey: "lastUsed")
+        usage.removeValue(forKey: prompt.filename)
+        persistUsage()
         load()
     }
 

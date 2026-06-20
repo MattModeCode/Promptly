@@ -134,7 +134,8 @@ panel jumping; ↵/Tab advance, esc cancels the whole expansion.
 **Exit criterion:** ordering reflects what you actually use; only reach for FTS if in-memory filter
 latency is *actually* felt (premature at <80 prompts).
 
-- [ ] Usage-ranked ordering; FTS/SQLite only if/when latency demands (currently an **"ask first"** boundary).
+- [x] Usage-ranked (frecency) ordering — frequency × 3-day-half-life recency decay; cold start degrades to seed order. FTS/SQLite **not** added (stays the ask-first boundary; premature <80 prompts).
+- [ ] **Manual verification (author / Tier B):** over a week of real use, confirm the ordering tracks what you reach for.
 
 ---
 
