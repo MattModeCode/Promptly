@@ -124,7 +124,8 @@ panel jumping; ↵/Tab advance, esc cancels the whole expansion.
 
 **Exit criterion:** select text anywhere → hotkey → a pre-filled "save as prompt" sheet writes a new markdown file.
 
-- [ ] Capture hotkey + nonactivating save sheet (title field focused, body pre-filled).
+- [x] Capture hotkey (⌥⇧Space) + save sheet (title field focused, body pre-filled). *Reuses `PromptEditorPanel` (activating); a nonactivating sheet is a future polish.*
+- [ ] **Manual verification (author / Tier B):** select text in a real app, fire ⌥⇧Space, confirm the sheet pre-fills the body + focuses the title, Save, and the new prompt is searchable in ⌥Space.
 
 ---
 

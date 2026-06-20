@@ -33,7 +33,7 @@ final class PromptStore {
             includingPropertiesForKeys: nil)) ?? []
         for url in mdFiles.filter({ $0.pathExtension == "md" }) {
             if let content = try? String(contentsOf: url, encoding: .utf8),
-               let prompt = parsePrompt(content, filename: url.lastPathComponent) {
+               let prompt = Self.parse(content, filename: url.lastPathComponent) {
                 if loaded.contains(where: { $0.name == prompt.name }) {
                     print("[PromptStore] WARNING: duplicate name '\(prompt.name)' in \(url.lastPathComponent) — skipping")
                 } else {
@@ -81,10 +81,16 @@ final class PromptStore {
     func save(name: String, keywords: [String], body: String, filename: String) {
         let fname = filename.isEmpty ? newSlug(for: name) : filename
         let url = Self.promptsDir.appendingPathComponent(fname)
-        let kw = keywords.joined(separator: ", ")
-        let md = "---\nname: \(name)\nkeywords: [\(kw)]\n---\n\n\(body)"
-        try? md.write(to: url, atomically: true, encoding: .utf8)
+        try? Self.serialize(name: name, keywords: keywords, body: body)
+            .write(to: url, atomically: true, encoding: .utf8)
         load()
+    }
+
+    /// The on-disk markdown shape (frontmatter + body). Pure + static so the Stage 5 Tier A
+    /// test can assert serialize→parse symmetry without touching ~/Prompts.
+    static func serialize(name: String, keywords: [String], body: String) -> String {
+        let kw = keywords.joined(separator: ", ")
+        return "---\nname: \(name)\nkeywords: [\(kw)]\n---\n\n\(body)"
     }
 
     func delete(_ prompt: Prompt) {
@@ -124,7 +130,7 @@ final class PromptStore {
         return candidate + ".md"
     }
 
-    private func parsePrompt(_ content: String, filename: String) -> Prompt? {
+    static func parse(_ content: String, filename: String) -> Prompt? {
         let lines = content.components(separatedBy: "\n")
         guard lines.first == "---" else {
             print("[PromptStore] WARNING: missing frontmatter in \(filename) — skipping")

@@ -19,7 +19,9 @@ final class PromptEditorPanel: NSWindow {
             ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
-    init(editing prompt: Prompt? = nil) {
+    /// `initialBody` pre-fills the body for a NEW prompt (Stage 5 inverse capture) while the
+    /// title field takes focus — the one thing the author must supply.
+    init(editing prompt: Prompt? = nil, initialBody: String? = nil) {
         // Initialize stored properties before super.init
         let nf = NSTextField()
         let kf = NSTextField()
@@ -45,7 +47,12 @@ final class PromptEditorPanel: NSWindow {
             nameField.stringValue = p.name
             keywordsField.stringValue = p.keywords.joined(separator: " ")
             bodyView.string = p.body
+        } else if let initialBody = initialBody {
+            bodyView.string = initialBody
         }
+        // Title field takes focus (the field the author must fill); the captured selection
+        // already sits in the body.
+        initialFirstResponder = nameField
     }
 
     private func buildContent(width w: CGFloat, height h: CGFloat) {

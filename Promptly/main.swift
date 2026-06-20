@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotkeyManager = HotkeyManager()
         hotkeyManager.onHotkey = { [weak self] in self?.onHotkey() }
+        hotkeyManager.onCaptureHotkey = { [weak self] in self?.onCaptureHotkey() }
 
         axPollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             self?.updateAXStatusMenuItem()
@@ -45,6 +46,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard let captured = Capture.captureFrontmostApp() else { return }
         panelController.present(captured: captured)
+    }
+
+    /// ⌥⇧Space — inverse capture (Stage 5). Read the selection from the host app FIRST (while
+    /// it is still frontmost), then open a pre-filled "save as prompt" sheet.
+    private func onCaptureHotkey() {
+        guard AXIsProcessTrusted() else {
+            showAccessibilityWindow()
+            return
+        }
+        guard let captured = Capture.captureFrontmostApp() else { return }
+        let selection = Capture.captureSelection(pid: captured.pid) ?? ""
+        openEditor(editing: nil, initialBody: selection)
     }
 
     private func handleCommit(_ prompt: Prompt, body: String) {
@@ -114,8 +127,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func newPrompt() { openEditor(editing: nil) }
 
-    private func openEditor(editing prompt: Prompt? = nil) {
-        let editor = PromptEditorPanel(editing: prompt)
+    private func openEditor(editing prompt: Prompt? = nil, initialBody: String? = nil) {
+        let editor = PromptEditorPanel(editing: prompt, initialBody: initialBody)
         editor.onSave = { [weak self] name, keywords, body in
             self?.promptStore.save(name: name, keywords: keywords, body: body,
                                    filename: prompt?.filename ?? "")
