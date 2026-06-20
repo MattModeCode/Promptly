@@ -28,6 +28,7 @@ private let kFooterHeight: CGFloat = 28
 private let kSeparatorHeight: CGFloat = 1
 private let kMaxRows = 6
 private let kPanelWidth: CGFloat = 560
+private let kPreviewMaxHeight: CGFloat = 220
 
 // MARK: - Key-capable panel
 
@@ -205,11 +206,18 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var tableView: NSTableView!
     private var emptyLabel: NSTextField!
     private var footerLabel: NSTextField!
+    private var previewContainer: NSScrollView!
+    private var previewTextView: NSTextView!
+    private var previewFadeView: NSView!
+    private var previewHeightConstraint: NSLayoutConstraint!
 
     private var results: [Prompt] = []
     private var selectedIndex = 0
     private var query: String { filterField?.stringValue ?? "" }
     private var committing = false
+    // Stage 9: ⇥ toggles a read-only preview of the selected prompt's raw body. This tracks the
+    // user's *intent* — it can stay true while there's transiently nothing to show (State C).
+    private var previewOpen = false
 
     // Stage 4: in-place {{ask:label}} fill-in. Non-nil only while the panel is in ask mode —
     // the same surface, the field repurposed as the answer box, the panel frame FROZEN.
@@ -222,8 +230,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // the filter changes the visible rows.
     private var hudAssignment: [Int: Prompt] = [:]
 
-    private static let browseFooter = "↑/↓ move · ↵ paste · ⌫ delete · ⌘E edit · esc dismiss"
-    private static let askFooter    = "↵ / ⇥ next · esc cancel"
+    private static let browseFooterBase = "↑/↓ move · ↵ paste · ⌫ delete · ⌘E edit · esc dismiss"
+    private static let askFooter        = "↵ / ⇥ next · esc cancel"
 
     override init() {
         super.init()
@@ -305,6 +313,41 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         scrollView.backgroundColor = .clear
         content.addSubview(scrollView)
 
+        // Preview pane (⇥ toggle) — read-only raw body of the selected prompt, collapsed by
+        // default (previewHeightConstraint starts at 0).
+        previewTextView = NSTextView()
+        previewTextView.minSize = NSSize(width: 0, height: 0)
+        previewTextView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        previewTextView.isVerticallyResizable = true
+        previewTextView.isHorizontallyResizable = false
+        previewTextView.autoresizingMask = .width
+        previewTextView.textContainer?.widthTracksTextView = true
+        previewTextView.isEditable = false
+        previewTextView.isSelectable = false
+        previewTextView.backgroundColor = .clear
+        previewTextView.font = Palette.mono(13)
+        previewTextView.textColor = Palette.primary
+        previewTextView.textContainerInset = NSSize(width: 16, height: 8)
+        previewTextView.setAccessibilityLabel("Prompt preview")
+
+        previewContainer = NSScrollView()
+        previewContainer.translatesAutoresizingMaskIntoConstraints = false
+        previewContainer.hasVerticalScroller = false
+        previewContainer.drawsBackground = false
+        previewContainer.backgroundColor = .clear
+        previewContainer.documentView = previewTextView
+        content.addSubview(previewContainer)
+
+        previewFadeView = NSView()
+        previewFadeView.translatesAutoresizingMaskIntoConstraints = false
+        previewFadeView.wantsLayer = true
+        let fadeLayer = CAGradientLayer()
+        fadeLayer.colors = [NSColor.clear.cgColor, Palette.panelBG.cgColor]
+        fadeLayer.locations = [0, 1]
+        previewFadeView.layer = fadeLayer
+        previewFadeView.isHidden = true
+        content.addSubview(previewFadeView)
+
         // Empty-state label (state A0 / C)
         emptyLabel = NSTextField(labelWithString: "")
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -328,9 +371,11 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         // zero. Updated per state in `applyState()`.
         scrollHeightConstraint = scrollView.heightAnchor.constraint(
             equalToConstant: CGFloat(kMaxRows) * kRowHeight)
+        previewHeightConstraint = previewContainer.heightAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
             scrollHeightConstraint,
+            previewHeightConstraint,
 
             filterField.topAnchor.constraint(equalTo: content.topAnchor),
             filterField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
@@ -346,7 +391,16 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
 
-            footerLabel.topAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            previewContainer.topAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            previewContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            previewContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+
+            previewFadeView.heightAnchor.constraint(equalToConstant: 20),
+            previewFadeView.leadingAnchor.constraint(equalTo: previewContainer.leadingAnchor),
+            previewFadeView.trailingAnchor.constraint(equalTo: previewContainer.trailingAnchor),
+            previewFadeView.bottomAnchor.constraint(equalTo: previewContainer.bottomAnchor),
+
+            footerLabel.topAnchor.constraint(equalTo: previewContainer.bottomAnchor),
             footerLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             footerLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             footerLabel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -366,12 +420,13 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         committing = false
         askFlow = nil
         askPrompt = nil
+        previewOpen = false
         restoreBrowseChrome()
         filterField.stringValue = ""
         refreshResults()
         // Freeze the ⌥1–9 assignment for this appearance (Stage 7) — from the same ranked list
         // the resting (empty-query) rows show, so the chips match the keys.
-        hudAssignment = HudRow.assign(promptStore.ranked())
+        hudAssignment = HudRow.assign(pins: promptStore.pinnedAssignment(), ranked: promptStore.ranked())
 
         let screen = captured.screen
         let h = panelHeight()
@@ -413,6 +468,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         results = promptStore.filter(query)
         selectedIndex = 0
         applyState()
+        updatePreview()
     }
 
     private func applyState() {
@@ -453,7 +509,45 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func panelHeight() -> CGFloat {
-        kFilterHeight + kSeparatorHeight + listHeight() + kFooterHeight
+        kFilterHeight + kSeparatorHeight + listHeight() + previewHeightConstraint.constant + kFooterHeight
+    }
+
+    // MARK: Preview pane (⇥ toggle)
+
+    /// Re-renders the preview for the current selection and resizes the panel to match.
+    /// `previewOpen` is the user's intent (set only by `togglePreview()` and the two explicit
+    /// closes in `present`/`enterAskMode`); this also folds in whether there's currently
+    /// anything to show, so a query with no matches collapses the pane without losing intent.
+    private func updatePreview() {
+        guard previewOpen, let prompt = selectedPrompt else {
+            previewHeightConstraint.constant = 0
+            previewFadeView.isHidden = true
+            resizePanel()
+            return
+        }
+        let attr = NSMutableAttributedString(
+            string: prompt.body,
+            attributes: [.font: Palette.mono(13), .foregroundColor: Palette.primary])
+        let increaseContrast = NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast
+        let spanColor = increaseContrast ? Palette.primary : Palette.secondary
+        for span in TokenEngine.spans(in: prompt.body) {
+            attr.addAttribute(.foregroundColor, value: spanColor, range: NSRange(span.range, in: prompt.body))
+        }
+        previewTextView.textStorage?.setAttributedString(attr)
+
+        previewTextView.layoutManager?.ensureLayout(for: previewTextView.textContainer!)
+        let used = previewTextView.layoutManager?.usedRect(for: previewTextView.textContainer!) ?? .zero
+        let contentHeight = ceil(used.height) + previewTextView.textContainerInset.height * 2
+        let clamped = min(contentHeight, kPreviewMaxHeight)
+        previewHeightConstraint.constant = clamped
+        previewFadeView.isHidden = contentHeight <= kPreviewMaxHeight
+        resizePanel()
+    }
+
+    private func togglePreview() {
+        previewOpen.toggle()
+        updatePreview()
+        updateBrowseFooter()
     }
 
     private func resizePanel() {
@@ -487,6 +581,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         selectedIndex = max(0, min(results.count - 1, selectedIndex + delta))
         tableView.selectRowIndexes(IndexSet(integer: selectedIndex), byExtendingSelection: false)
         tableView.scrollRowToVisible(selectedIndex)
+        updatePreview()
     }
 
     private func commitSelected() {
@@ -529,9 +624,14 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func enterAskMode(prompt: Prompt, flow: AskFlow) {
         askPrompt = prompt
         askFlow = flow
+        // The list area is repurposed for the ask progress line; the preview has no business
+        // staying open underneath that. updatePreview() only resizes if the preview was actually
+        // open (it collapses to 0 here) — the list/empty-label swap below never touches the frame.
+        previewOpen = false
+        updatePreview()
         // Repurpose the SAME surface: hide the list, keep the panel exactly where/what size it
-        // is (do NOT call resizePanel — spatial trust, FEATURES §7), turn the field into the
-        // answer box, and use the vacated list space for a quiet progress line.
+        // is otherwise (spatial trust, FEATURES §7) — turn the field into the answer box, and use
+        // the vacated list space for a quiet progress line.
         scrollView.isHidden = true
         emptyLabel.isHidden = false
         filterField.stringValue = ""
@@ -579,8 +679,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         filterField.placeholderAttributedString = NSAttributedString(
             string: "Search prompts…",
             attributes: [.font: Palette.mono(14), .foregroundColor: Palette.footer])
-        footerLabel.stringValue = Self.browseFooter
+        updateBrowseFooter()
         footerLabel.isHidden = false
+    }
+
+    private func updateBrowseFooter() {
+        footerLabel.stringValue = Self.browseFooterBase + (previewOpen ? " · ⇥ hide preview" : " · ⇥ preview")
     }
 
     // MARK: State D animation
@@ -623,14 +727,17 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                  doCommandBy commandSelector: Selector) -> Bool {
         switch commandSelector {
         case #selector(NSResponder.cancelOperation(_:)):   // esc
-            if isAsking { cancelAsk() } else { dismiss() }
+            if isAsking { cancelAsk() }
+            else if previewOpen { togglePreview() }
+            else { dismiss() }
             return true
         case #selector(NSResponder.insertNewline(_:)):      // ↵
             if isAsking { askAdvance() } else { commitSelected() }
             return true
-        case #selector(NSResponder.insertTab(_:)):          // ⇥ — advances an ask
+        case #selector(NSResponder.insertTab(_:)):          // ⇥ — advances an ask, else toggles preview
             if isAsking { askAdvance(); return true }
-            return false
+            togglePreview()
+            return true
         case #selector(NSResponder.moveUp(_:)):             // ↑
             if isAsking { return true }                     // no list in ask mode — swallow
             moveSelection(-1)
