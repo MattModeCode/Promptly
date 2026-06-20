@@ -189,6 +189,33 @@ final class PromptStore {
             .map { $0.0 }
     }
 
+    // MARK: - History (pure, testable — Feature #4)
+
+    /// Usage (fire) history ordered by recency. Only prompts with a usage entry are included
+    /// (no usage ⇒ never fired ⇒ not history). Pure so the Tier A test needs no store.
+    static func historyOrder(_ prompts: [Prompt], usage: [String: PromptUsage]) -> [(Prompt, Date)] {
+        prompts.enumerated()
+            .compactMap { idx, p -> (Prompt, Date, Int)? in
+                guard let u = usage[p.filename] else { return nil }
+                return (p, u.lastUsed, idx)
+            }
+            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.2 < $1.2 }
+            .map { ($0.0, $0.1) }
+    }
+
+    func history() -> [(Prompt, Date)] {
+        Self.historyOrder(prompts, usage: usage)
+    }
+
+    /// Fuzzy search restricted to the history subset (Feature #4) — typing in history mode
+    /// filters what you've actually fired, never the full library. Empty query preserves
+    /// recency order.
+    func filterHistory(_ query: String) -> [Prompt] {
+        if query.isEmpty { return history().map { $0.0 } }
+        let usedFilenames = Set(usage.keys)
+        return filter(query).filter { usedFilenames.contains($0.filename) }
+    }
+
     // MARK: - Mutation
 
     func save(name: String, keywords: [String], body: String,
