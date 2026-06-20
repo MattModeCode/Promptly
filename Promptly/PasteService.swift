@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import os.log
 
 private let log = OSLog(subsystem: "com.promptly.app", category: "paste")
@@ -9,7 +10,11 @@ enum PasteResult {
 }
 
 struct PasteService {
-    static func paste(_ text: String, into captured: CapturedApp) -> PasteResult {
+    /// Paste `text` into the captured app. `cursorOffset` (a UTF-16 offset into `text`,
+    /// from a `{{cursor}}` token — DESIGN §2.5) places the caret precisely on the B path;
+    /// the A fallback can't honor it and leaves the caret at end-of-paste.
+    static func paste(_ text: String, into captured: CapturedApp,
+                      cursorOffset: Int? = nil) -> PasteResult {
         dispatchPrecondition(condition: .onQueue(.main))
 
         let trusted = AXIsProcessTrusted()
@@ -28,6 +33,9 @@ struct PasteService {
         // Anchor read-back on the BEFORE length (DESIGN §2.1): a selected-text insert into a
         // non-empty field is confirmed by a +text.count delta, so we must read len first.
         evidence.beforeLen = axValueLength(element)
+        // Caret start BEFORE the insert — needed to place {{cursor}} on the selected-text path,
+        // where the prompt is dropped at the existing caret (not at offset 0).
+        let caretStart = selectedRangeLocation(element)
         let path = choosePath(element, evidence: &evidence)
         os_log("Strategy chosen: %{public}@", log: log, type: .info, String(describing: path))
 
@@ -49,9 +57,16 @@ struct PasteService {
             let rb = readBackConfirms(element, inserted: text, beforeLen: evidence.beforeLen)
             confirmed = rb.confirmed
             os_log("Read-back: %{public}@", log: log, type: .info, confirmed ? "confirmed" : "NOT confirmed")
+            // {{cursor}} placement is a B-path-only precise feature (DESIGN §2.5). Best-effort:
+            // a failure to move the caret never fails the paste — the text already landed.
+            if confirmed, let offset = cursorOffset {
+                let base = (path == .bValueSet) ? 0 : (caretStart ?? 0)
+                placeCaret(element, at: base + offset)
+            }
         case .aClipboard:
             // Strategy A pastes via synthesized ⌘V into a possibly-unreadable target; the
-            // success signal is a clean clipboard + the paste having been sent.
+            // success signal is a clean clipboard + the paste having been sent. The caret
+            // lands at end-of-paste; {{cursor}} can't be honored here (DESIGN §2.5).
             confirmed = ok
         }
 
@@ -63,5 +78,28 @@ struct PasteService {
             return ok ? .success : .failure(reason: "Clipboard paste failed")
         }
         return (ok && confirmed) ? .success : .failure(reason: "Paste not confirmed via \(path)")
+    }
+
+    // MARK: - Caret placement (B path only — {{cursor}}, DESIGN §2.5)
+
+    /// The current caret location (start of the selected range) of a focused element, or nil
+    /// if the element doesn't expose `kAXSelectedTextRange`. App-level read, not in PasteCore.
+    private static func selectedRangeLocation(_ el: AXUIElement) -> Int? {
+        var ref: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, &ref) == .success,
+              let value = ref else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(value as! AXValue, .cfRange, &range) else { return nil }
+        return range.location
+    }
+
+    /// Collapse the selection to a zero-length caret at `location`. Best-effort: a silent
+    /// no-op (e.g. an element that ignores range writes) is acceptable — the text landed.
+    private static func placeCaret(_ el: AXUIElement, at location: Int) {
+        var range = CFRange(location: max(0, location), length: 0)
+        guard let value = AXValueCreate(.cfRange, &range) else { return }
+        let err = AXUIElementSetAttributeValue(el, kAXSelectedTextRangeAttribute as CFString, value)
+        os_log("Caret placement at %d: %{public}@", log: log, type: .info,
+               location, err == .success ? "ok" : "ignored")
     }
 }

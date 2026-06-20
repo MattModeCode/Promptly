@@ -104,8 +104,9 @@ to, because hand-editing markdown finally got annoying* (that annoyance is the s
 
 **Exit criterion:** a prompt with `{{clipboard}}`/`{{date}}` assembles correctly at paste time.
 
-- [ ] `{{clipboard}}`, `{{date}}`, `{{cursor}}` (cursor precise on B path, caret-at-end on A — DESIGN §2.5).
-- [ ] Unknown tokens stay literal; empty known tokens log a warning.
+- [x] `{{clipboard}}`, `{{date}}`, `{{cursor}}` (cursor precise on B path, caret-at-end on A — DESIGN §2.5).
+- [x] Unknown tokens stay literal; empty known tokens log a warning.
+- [ ] **Manual verification (author / Tier B):** paste a `{{clipboard}}`/`{{date}}` prompt into a B-path app (Terminal/Xcode) and an A-path app (VSCode); confirm assembly + caret position (precise on B, end-of-text on A).
 
 ---
 
