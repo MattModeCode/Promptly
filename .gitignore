@@ -2,3 +2,5 @@
 *.swiftmodule
 .build/
 DerivedData/
+.worktrees/
+.superpowers/
