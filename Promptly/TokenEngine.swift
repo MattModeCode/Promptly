@@ -31,6 +31,15 @@ struct AskToken: Equatable {
     let label: String
 }
 
+/// One discovered `{{…}}` token in a prompt body, for the preview pane (Stage 9). Pure,
+/// UI-free data — the panel maps `kind` to attributes; `range` covers the full literal
+/// token including its braces, matching what `raw` captures in `expand`/`fillAsks`.
+struct TokenSpan: Equatable {
+    enum Kind: Equatable { case clipboard, date, cursor, ask, unknown }
+    let range: Range<String.Index>
+    let kind: Kind
+}
+
 enum TokenEngine {
 
     /// ISO-8601 calendar date (yyyy-MM-dd), locale-stable so it's deterministic to test.
@@ -94,6 +103,45 @@ enum TokenEngine {
                     let label = String(inner.dropFirst(4)).trimmingCharacters(in: .whitespaces)
                     if !label.isEmpty { out.append(AskToken(label: label)) }
                 }
+                i = close + 2
+                continue
+            }
+            i += 1
+        }
+        return out
+    }
+
+    // MARK: - Preview spans (Stage 9)
+
+    /// Every `{{…}}` token in `body`, in document order, classified by kind — the pure seam
+    /// the preview pane's cell maps to attributes (dim/emphasize the whole `{{…}}` chip).
+    /// Unknown/malformed tokens are still included, classified `.unknown` — "unknown" means
+    /// classified as such, not excluded from the list. Plain text with no tokens yields `[]`.
+    static func spans(in body: String) -> [TokenSpan] {
+        var out: [TokenSpan] = []
+        let chars = Array(body)
+        let n = chars.count
+        var i = 0
+        while i < n {
+            if chars[i] == "{", i + 1 < n, chars[i + 1] == "{",
+               let close = closingBraces(chars, from: i + 2) {
+                let inner = String(chars[(i + 2)..<close]).trimmingCharacters(in: .whitespaces)
+                let kind: TokenSpan.Kind
+                switch inner {
+                case "clipboard": kind = .clipboard
+                case "date": kind = .date
+                case "cursor": kind = .cursor
+                default:
+                    if inner.hasPrefix("ask:"),
+                       !String(inner.dropFirst(4)).trimmingCharacters(in: .whitespaces).isEmpty {
+                        kind = .ask
+                    } else {
+                        kind = .unknown
+                    }
+                }
+                let start = body.index(body.startIndex, offsetBy: i)
+                let end = body.index(body.startIndex, offsetBy: close + 2)
+                out.append(TokenSpan(range: start..<end, kind: kind))
                 i = close + 2
                 continue
             }
