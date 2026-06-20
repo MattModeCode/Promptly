@@ -115,7 +115,8 @@ to, because hand-editing markdown finally got annoying* (that annoyance is the s
 **Exit criterion:** a `{{ask}}` prompt expands the palette in place into a fill-in flow without the
 panel jumping; ↵/Tab advance, esc cancels the whole expansion.
 
-- [ ] In-place transform (no resize jump); progress indicator; multi-`{{ask}}` chaining.
+- [x] In-place transform (no resize jump); progress indicator; multi-`{{ask}}` chaining.
+- [ ] **Manual verification (author / Tier B):** run a 2–3 `{{ask}}` prompt end-to-end; confirm the panel never jumps/resizes, ↵/⇥ advance, esc cancels the whole expansion mid-flow.
 
 ---
 

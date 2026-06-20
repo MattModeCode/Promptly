@@ -168,3 +168,48 @@ enum TokenEngine {
         os_log("token: %{public}@", log: tokenLog, type: .info, s)
     }
 }
+
+// MARK: - AskFlow (Stage 4) — pure state machine for interactive {{ask:label}} fill-in
+
+/// Drives the in-place fill-in flow for a prompt's `{{ask:label}}` tokens. Pure and
+/// UI-free so the Tier A tests need no panel: the `PanelController` owns the keystrokes
+/// and the surface; this owns only "which label is active, collect answers in order,
+/// assemble the final body." A prompt with no asks yields `nil` (caller pastes directly).
+struct AskFlow: Equatable {
+    let labels: [String]
+    private(set) var answers: [String] = []
+    private(set) var index: Int = 0
+
+    /// nil when the body contains no `{{ask:…}}` tokens.
+    init?(body: String) {
+        let toks = TokenEngine.asks(in: body)
+        guard !toks.isEmpty else { return nil }
+        labels = toks.map { $0.label }
+    }
+
+    var currentLabel: String { labels[min(index, labels.count - 1)] }
+    /// 1-based position for a quiet "k of N" indicator.
+    var progress: (current: Int, total: Int) { (min(index + 1, labels.count), labels.count) }
+    var isComplete: Bool { index >= labels.count }
+
+    /// Record the current answer and advance. ↵ and Tab both call this. Returns true while
+    /// more asks remain, false once the last answer has been collected (caller then pastes).
+    mutating func advance(with answer: String) -> Bool {
+        guard !isComplete else { return false }
+        answers.append(answer)
+        index += 1
+        return !isComplete
+    }
+
+    /// esc cancels the WHOLE expansion (FEATURES §7) — reset to the first ask, no answers.
+    mutating func reset() {
+        answers.removeAll()
+        index = 0
+    }
+
+    /// The prompt body with every ask replaced by its collected answer (static tokens are
+    /// left for `expand` to resolve afterward).
+    func finalText(body: String) -> String {
+        TokenEngine.fillAsks(body, answers: answers)
+    }
+}

@@ -20,8 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         panelController = PanelController()
         panelController.promptStore = promptStore
-        panelController.onCommit = { [weak self] prompt in
-            self?.handleCommit(prompt)
+        panelController.onCommit = { [weak self] prompt, body in
+            self?.handleCommit(prompt, body: body)
         }
         panelController.onDismiss = {}
         panelController.onEdit = { [weak self] prompt in self?.openEditor(editing: prompt) }
@@ -47,14 +47,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelController.present(captured: captured)
     }
 
-    private func handleCommit(_ prompt: Prompt) {
+    private func handleCommit(_ prompt: Prompt, body: String) {
         guard let captured = panelController.lastCaptured else { return }
         promptStore.recordUse(of: prompt)
         // Expand static tokens at paste time (DESIGN §8). Read the clipboard BEFORE pasting —
         // Strategy A clears+restores it, so {{clipboard}} must be snapshotted here, up front.
-        // (Any {{ask:…}} have already been filled in by the panel's ask flow — Stage 4.)
+        // `body` already has any {{ask:…}} filled in by the panel's ask flow (Stage 4).
         let clipboard = NSPasteboard.general.string(forType: .string)
-        let expansion = TokenEngine.expand(prompt.body, clipboard: clipboard, now: Date())
+        let expansion = TokenEngine.expand(body, clipboard: clipboard, now: Date())
         let result = PasteService.paste(expansion.text, into: captured,
                                         cursorOffset: expansion.cursorOffset)
         switch result {

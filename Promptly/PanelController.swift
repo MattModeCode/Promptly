@@ -128,7 +128,9 @@ private final class PromptCellView: NSTableCellView {
 final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegate {
 
     var promptStore: PromptStore!
-    var onCommit: ((Prompt) -> Void)?
+    /// (selected prompt, body to paste). The body equals `prompt.body` for a plain prompt and
+    /// the ask-filled body once a `{{ask:…}}` flow completes; static tokens are expanded downstream.
+    var onCommit: ((Prompt, String) -> Void)?
     var onDismiss: (() -> Void)?
     var onDelete: ((Prompt) -> Void)?
     var onEdit: ((Prompt) -> Void)?
@@ -152,6 +154,15 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var selectedIndex = 0
     private var query: String { filterField?.stringValue ?? "" }
     private var committing = false
+
+    // Stage 4: in-place {{ask:label}} fill-in. Non-nil only while the panel is in ask mode —
+    // the same surface, the field repurposed as the answer box, the panel frame FROZEN.
+    private var askFlow: AskFlow?
+    private var askPrompt: Prompt?
+    private var isAsking: Bool { askFlow != nil }
+
+    private static let browseFooter = "↑/↓ move · ↵ paste · ⌫ delete · ⌘E edit · esc dismiss"
+    private static let askFooter    = "↵ / ⇥ next · esc cancel"
 
     override init() {
         super.init()
@@ -291,6 +302,9 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     func present(captured: CapturedApp) {
         lastCaptured = captured
         committing = false
+        askFlow = nil
+        askPrompt = nil
+        restoreBrowseChrome()
         filterField.stringValue = ""
         refreshResults()
 
@@ -417,12 +431,80 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             dismiss()
             return
         }
-        committing = true
         let prompt = results[selectedIndex]
-        // State D drops the footer immediately; the paste itself is driven by onCommit, which
-        // calls back into dismissAfterSuccessfulPaste / showFailure.
+        // Stage 4: a prompt with {{ask:…}} transforms the palette in place instead of pasting.
+        if let flow = AskFlow(body: prompt.body) {
+            enterAskMode(prompt: prompt, flow: flow)
+            return
+        }
+        fire(prompt: prompt, body: prompt.body)
+    }
+
+    /// Commit the assembled body to the host app (State D). Drops the footer immediately; the
+    /// paste itself is driven by onCommit → dismissAfterSuccessfulPaste / showFailure.
+    private func fire(prompt: Prompt, body: String) {
+        committing = true
         footerLabel.isHidden = true
-        onCommit?(prompt)
+        onCommit?(prompt, body)
+    }
+
+    // MARK: Ask mode (Stage 4) — in-place fill-in; panel frame stays frozen
+
+    private func enterAskMode(prompt: Prompt, flow: AskFlow) {
+        askPrompt = prompt
+        askFlow = flow
+        // Repurpose the SAME surface: hide the list, keep the panel exactly where/what size it
+        // is (do NOT call resizePanel — spatial trust, FEATURES §7), turn the field into the
+        // answer box, and use the vacated list space for a quiet progress line.
+        scrollView.isHidden = true
+        emptyLabel.isHidden = false
+        filterField.stringValue = ""
+        updateAskChrome()
+    }
+
+    private func updateAskChrome() {
+        guard let flow = askFlow else { return }
+        let p = flow.progress
+        filterField.placeholderAttributedString = NSAttributedString(
+            string: "\(flow.currentLabel) ›",
+            attributes: [.font: Palette.mono(14), .foregroundColor: Palette.footer])
+        emptyLabel.stringValue = "\(p.current) of \(p.total)"
+        footerLabel.stringValue = Self.askFooter
+    }
+
+    /// ↵ or ⇥: record the current answer, advance, and either prompt for the next ask or
+    /// assemble the final body and fire the paste.
+    private func askAdvance() {
+        guard var flow = askFlow, let prompt = askPrompt else { return }
+        let more = flow.advance(with: filterField.stringValue)
+        askFlow = flow
+        if more {
+            filterField.stringValue = ""
+            updateAskChrome()
+        } else {
+            let body = flow.finalText(body: prompt.body)
+            askFlow = nil
+            askPrompt = nil
+            fire(prompt: prompt, body: body)
+        }
+    }
+
+    /// esc cancels the WHOLE expansion (FEATURES §7) and returns to the browse palette; a
+    /// second esc then dismisses as usual.
+    private func cancelAsk() {
+        askFlow = nil
+        askPrompt = nil
+        restoreBrowseChrome()
+        filterField.stringValue = ""
+        refreshResults()
+    }
+
+    private func restoreBrowseChrome() {
+        filterField.placeholderAttributedString = NSAttributedString(
+            string: "Search prompts…",
+            attributes: [.font: Palette.mono(14), .foregroundColor: Palette.footer])
+        footerLabel.stringValue = Self.browseFooter
+        footerLabel.isHidden = false
     }
 
     // MARK: State D animation
@@ -453,6 +535,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // MARK: NSTextFieldDelegate
 
     func controlTextDidChange(_ obj: Notification) {
+        // In ask mode the field is an answer box, not a filter — don't re-query the store.
+        guard !isAsking else { return }
         refreshResults()
     }
 
@@ -463,23 +547,28 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                  doCommandBy commandSelector: Selector) -> Bool {
         switch commandSelector {
         case #selector(NSResponder.cancelOperation(_:)):   // esc
-            dismiss()
+            if isAsking { cancelAsk() } else { dismiss() }
             return true
         case #selector(NSResponder.insertNewline(_:)):      // ↵
-            commitSelected()
+            if isAsking { askAdvance() } else { commitSelected() }
             return true
+        case #selector(NSResponder.insertTab(_:)):          // ⇥ — advances an ask
+            if isAsking { askAdvance(); return true }
+            return false
         case #selector(NSResponder.moveUp(_:)):             // ↑
+            if isAsking { return true }                     // no list in ask mode — swallow
             moveSelection(-1)
             return true
         case #selector(NSResponder.moveDown(_:)):           // ↓
+            if isAsking { return true }
             moveSelection(1)
             return true
         case #selector(NSResponder.deleteBackward(_:)):     // ⌫ — delete selected when empty
-            if textView.string.isEmpty {
+            if !isAsking, textView.string.isEmpty {
                 confirmDeleteSelected()
                 return true
             }
-            return false
+            return false                                    // in ask mode: normal text delete
         default:
             return false
         }
