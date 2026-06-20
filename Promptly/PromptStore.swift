@@ -210,10 +210,10 @@ final class PromptStore {
     /// Fuzzy search restricted to the history subset (Feature #4) — typing in history mode
     /// filters what you've actually fired, never the full library. Empty query preserves
     /// recency order.
-    func filterHistory(_ query: String) -> [Prompt] {
-        if query.isEmpty { return history().map { $0.0 } }
-        let usedFilenames = Set(usage.keys)
-        return filter(query).filter { usedFilenames.contains($0.filename) }
+    func filterHistory(_ query: String) -> [(Prompt, Date)] {
+        if query.isEmpty { return history() }
+        let dates = Dictionary(uniqueKeysWithValues: history().map { ($0.0.filename, $0.1) })
+        return filter(query).compactMap { p in dates[p.filename].map { (p, $0) } }
     }
 
     // MARK: - Mutation

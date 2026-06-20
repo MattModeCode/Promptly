@@ -81,11 +81,18 @@ final class FilterField: NSTextField {
     /// ⌥1–9 — fire the prompt frozen at that HUD slot (Stage 7). Intercepted here, before the
     /// field editor would insert the option-modified character.
     var onHudSelect: ((Int) -> Void)?
+    /// ⌘R — toggle history mode (Feature #4). Same interception reason as ⌘E.
+    var onHistoryToggle: (() -> Void)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command),
            event.charactersIgnoringModifiers?.lowercased() == "e" {
             onEdit?()
+            return true
+        }
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "r" {
+            onHistoryToggle?()
             return true
         }
         if event.modifierFlags.contains(.option),
@@ -150,8 +157,8 @@ private final class PromptCellView: NSTableCellView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, query: String, slot: Int?) {
-        slotLabel.stringValue = slot.map { "⌥\($0)" } ?? ""
+    func configure(name: String, query: String, trailing: String?) {
+        slotLabel.stringValue = trailing ?? ""
         if query.isEmpty {
             label.attributedStringValue = NSAttributedString(
                 string: name,
@@ -219,6 +226,11 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // user's *intent* — it can stay true while there's transiently nothing to show (State C).
     private var previewOpen = false
 
+    // Feature #4: ⌘R toggles a third palette mode showing usage history instead of the library.
+    private var historyMode = false
+    /// Parallel to `results`, same indices — only populated while `historyMode` is true.
+    private var historyTimestamps: [Date] = []
+
     // Stage 4: in-place {{ask:label}} fill-in. Non-nil only while the panel is in ask mode —
     // the same surface, the field repurposed as the answer box, the panel frame FROZEN.
     private var askFlow: AskFlow?
@@ -232,6 +244,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private static let browseFooterBase = "↑/↓ move · ↵ paste · ⌫ delete · ⌘E edit · esc dismiss"
     private static let askFooter        = "↵ / ⇥ next · esc cancel"
+    private static let historyFooter    = "↑/↓ move · ↵ paste · ⌘R search · esc back"
 
     override init() {
         super.init()
@@ -281,6 +294,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             onEdit?(p)
         }
         filterField.onHudSelect = { [weak self] n in self?.hudSelect(n) }
+        filterField.onHistoryToggle = { [weak self] in self?.toggleHistoryMode() }
         content.addSubview(filterField)
 
         // Separator
@@ -421,6 +435,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         askFlow = nil
         askPrompt = nil
         previewOpen = false
+        historyMode = false
         restoreBrowseChrome()
         filterField.stringValue = ""
         refreshResults()
@@ -441,6 +456,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             ctx.duration = 0.09
             panel.animator().alphaValue = 1
         }
+    }
+
+    /// Opens the panel already in history mode — the menu-bar "Recent prompts…" entry point.
+    func presentHistory(captured: CapturedApp) {
+        present(captured: captured)
+        enterHistoryMode()
     }
 
     func dismiss() {
@@ -465,7 +486,14 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // MARK: Results / state
 
     private func refreshResults() {
-        results = promptStore.filter(query)
+        if historyMode {
+            let pairs = promptStore.filterHistory(query)
+            results = pairs.map { $0.0 }
+            historyTimestamps = pairs.map { $0.1 }
+        } else {
+            results = promptStore.filter(query)
+            historyTimestamps = []
+        }
         selectedIndex = 0
         applyState()
         updatePreview()
@@ -477,6 +505,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if libraryEmpty {
             // State A0
             showEmpty("No prompts yet. Drop a .md file in ~/Prompts to begin →")
+        } else if historyMode && results.isEmpty && query.isEmpty {
+            showEmpty("No history yet — prompts you use will show here.")
         } else if results.isEmpty {
             // State C
             showEmpty("No match · ↵ to dismiss")
@@ -597,7 +627,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     /// ⌥N — fire the prompt frozen at HUD slot N (Stage 7). Honors the freeze: works against the
     /// at-present-time assignment regardless of the current filter, and is inert during ask mode.
     private func hudSelect(_ n: Int) {
-        guard !committing, !isAsking, let prompt = hudAssignment[n] else { return }
+        guard !committing, !isAsking, !historyMode, let prompt = hudAssignment[n] else { return }
         commit(prompt)
     }
 
@@ -670,7 +700,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func cancelAsk() {
         askFlow = nil
         askPrompt = nil
-        restoreBrowseChrome()
+        if historyMode { updateHistoryChrome() } else { restoreBrowseChrome() }
         filterField.stringValue = ""
         refreshResults()
     }
@@ -685,6 +715,37 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     private func updateBrowseFooter() {
         footerLabel.stringValue = Self.browseFooterBase + (previewOpen ? " · ⇥ hide preview" : " · ⇥ preview")
+    }
+
+    // MARK: History mode (Feature #4) — ⌘R toggle
+
+    private func toggleHistoryMode() {
+        guard !isAsking else { return }   // can't switch palette mode mid fill-in
+        if historyMode { exitHistoryMode() } else { enterHistoryMode() }
+    }
+
+    private func enterHistoryMode() {
+        historyMode = true
+        previewOpen = false
+        filterField.stringValue = ""
+        updateHistoryChrome()
+        refreshResults()
+    }
+
+    private func exitHistoryMode() {
+        historyMode = false
+        previewOpen = false
+        filterField.stringValue = ""
+        restoreBrowseChrome()
+        refreshResults()
+    }
+
+    private func updateHistoryChrome() {
+        filterField.placeholderAttributedString = NSAttributedString(
+            string: "Search history…",
+            attributes: [.font: Palette.mono(14), .foregroundColor: Palette.footer])
+        footerLabel.stringValue = Self.historyFooter
+        footerLabel.isHidden = false
     }
 
     // MARK: State D animation
@@ -729,6 +790,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         case #selector(NSResponder.cancelOperation(_:)):   // esc
             if isAsking { cancelAsk() }
             else if previewOpen { togglePreview() }
+            else if historyMode { exitHistoryMode() }
             else { dismiss() }
             return true
         case #selector(NSResponder.insertNewline(_:)):      // ↵
@@ -736,6 +798,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return true
         case #selector(NSResponder.insertTab(_:)):          // ⇥ — advances an ask, else toggles preview
             if isAsking { askAdvance(); return true }
+            if historyMode { return true }                  // preview is inert in history mode
             togglePreview()
             return true
         case #selector(NSResponder.moveUp(_:)):             // ↑
@@ -773,10 +836,17 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return c
         }()
         let prompt = results[row]
-        // Chips only in the resting (empty-query) state, where the visible rows are the ranked
-        // list and so line up with the frozen ⌥1–9 assignment.
-        let slot: Int? = (query.isEmpty && row < HudRow.slotCount) ? row + 1 : nil
-        cell.configure(name: prompt.name, query: query, slot: slot)
+        let trailing: String?
+        if historyMode {
+            trailing = RelativeTime.format(historyTimestamps[row], now: Date())
+        } else if query.isEmpty && row < HudRow.slotCount {
+            // Chips only in the resting (empty-query) state, where the visible rows are the
+            // ranked list and so line up with the frozen ⌥1–9 assignment.
+            trailing = "⌥\(row + 1)"
+        } else {
+            trailing = nil
+        }
+        cell.configure(name: prompt.name, query: query, trailing: trailing)
         return cell
     }
 
