@@ -659,9 +659,9 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         // open (it collapses to 0 here) — the list/empty-label swap below never touches the frame.
         previewOpen = false
         updatePreview()
-        // Repurpose the SAME surface: hide the list, keep the panel exactly where/what size it
-        // is otherwise (spatial trust, FEATURES §7) — turn the field into the answer box, and use
-        // the vacated list space for a quiet progress line.
+        // Repurpose the SAME surface: hide the list, collapse any open preview (above), then keep
+        // the list-area size frozen otherwise (spatial trust, FEATURES §7) — turn the field into
+        // the answer box, and use the vacated list space for a quiet progress line.
         scrollView.isHidden = true
         emptyLabel.isHidden = false
         filterField.stringValue = ""
