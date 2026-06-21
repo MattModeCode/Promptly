@@ -248,7 +248,6 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     /// the ask-filled body once a `{{ask:…}}` flow completes; static tokens are expanded downstream.
     var onCommit: ((Prompt, String) -> Void)?
     var onDismiss: (() -> Void)?
-    var onDelete: ((Prompt) -> Void)?
     var onEdit: ((Prompt) -> Void)?
     private(set) var lastCaptured: CapturedApp?
 
@@ -305,7 +304,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // mid-appearance if hotkeys change on disk via the Library window).
     private var hudSlotByFilename: [String: Int] = [:]
 
-    private static let browseFooter = "↑/↓ move · ↵ paste · ⌫ delete · ⌘E edit · esc dismiss"
+    private static let browseFooter = "↑/↓ move · ↵ paste · ⌘E edit · esc dismiss"
     private static let askFooter    = "↵ / ⇥ next · esc cancel"
 
     override init() {
@@ -413,7 +412,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         content.addSubview(emptyLabel)
 
         // Footer
-        footerLabel = NSTextField(labelWithString: "↑/↓ move · ↵ paste · ⌫ delete · ⌘E edit · esc dismiss")
+        footerLabel = NSTextField(labelWithString: "↑/↓ move · ↵ paste · ⌘E edit · esc dismiss")
         footerLabel.translatesAutoresizingMaskIntoConstraints = false
         footerLabel.font = Palette.mono(11)
         footerLabel.textColor = Palette.footer
@@ -654,21 +653,6 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     // MARK: Selection
 
-    private func confirmDeleteSelected() {
-        guard let prompt = selectedPrompt else { return }
-        let alert = NSAlert()
-        alert.messageText = "Delete \"\(prompt.name)\"?"
-        alert.informativeText = "Removes the file from ~/Prompts. Cannot be undone."
-        alert.addButton(withTitle: "Delete")
-        alert.addButton(withTitle: "Cancel")
-        alert.alertStyle = .warning
-        if alert.runModal() == .alertFirstButtonReturn {
-            onDelete?(prompt)
-            promptStore.delete(prompt)
-            refreshResults()
-        }
-    }
-
     private func moveSelection(_ delta: Int) {
         let total = pinnedResults.count + results.count
         guard total > 0 else { return }
@@ -832,12 +816,6 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             if isAsking { return true }
             moveSelection(1)
             return true
-        case #selector(NSResponder.deleteBackward(_:)):     // ⌫ — delete selected when empty
-            if !isAsking, textView.string.isEmpty {
-                confirmDeleteSelected()
-                return true
-            }
-            return false                                    // in ask mode: normal text delete
         default:
             return false
         }
