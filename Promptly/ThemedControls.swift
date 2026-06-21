@@ -291,6 +291,135 @@ final class NewFolderSheet: NSObject, NSTextFieldDelegate {
     }
 }
 
+// MARK: - DeleteFolderSheet
+
+/// What to do with the prompts inside a folder being deleted.
+enum FolderDeleteAction {
+    case deleteAll
+    case moveTo(String)   // "" = root/General
+}
+
+/// Themed sheet for deleting a non-empty folder — asks whether to move its prompts elsewhere
+/// (default, safer) or delete them all. Same shape/chrome as `NewFolderSheet`/`ConfirmSheet`.
+final class DeleteFolderSheet: NSObject {
+    private var sheet: NSWindow!
+    private var completion: ((FolderDeleteAction?) -> Void)?
+    private var moveRadio: NSButton!
+    private var deleteRadio: NSButton!
+    private var destinationPopUp: ThemedPopUp!
+
+    // Self-retain for the sheet's lifetime so the caller doesn't have to hold it.
+    private static var active: DeleteFolderSheet?
+
+    func present(over host: NSWindow, folderName: String, promptCount: Int, destinations: [String],
+                 completion: @escaping (FolderDeleteAction?) -> Void) {
+        self.completion = completion
+        DeleteFolderSheet.active = self
+        build(folderName: folderName, promptCount: promptCount, destinations: destinations)
+        host.beginSheet(sheet, completionHandler: nil)
+    }
+
+    private func radioButton(title: String, action: Selector) -> NSButton {
+        let btn = NSButton(radioButtonWithTitle: title, target: self, action: action)
+        btn.attributedTitle = NSAttributedString(string: title, attributes: [
+            .font: Palette.mono(12), .foregroundColor: Palette.primary,
+        ])
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        return btn
+    }
+
+    private func build(folderName: String, promptCount: Int, destinations: [String]) {
+        let pad: CGFloat = 20
+        let width: CGFloat = 380
+        sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 220),
+                         styleMask: [.titled], backing: .buffered, defer: false)
+        sheet.appearance = NSAppearance(named: .darkAqua)
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 220))
+        content.wantsLayer = true
+        content.layer?.backgroundColor = Palette.panelBG.cgColor
+        sheet.contentView = content
+
+        let header = NSTextField(labelWithString: "Delete folder \"\(folderName)\"?")
+        header.font = Palette.monoMedium(14)
+        header.textColor = Palette.primary
+        header.backgroundColor = .clear
+        header.isBordered = false
+        header.lineBreakMode = .byTruncatingTail
+        header.translatesAutoresizingMaskIntoConstraints = false
+
+        let countText = promptCount == 1 ? "1 prompt is in this folder." : "\(promptCount) prompts are in this folder."
+        let body = NSTextField(labelWithString: countText)
+        body.font = Palette.mono(12)
+        body.textColor = Palette.secondary
+        body.backgroundColor = .clear
+        body.isBordered = false
+        body.translatesAutoresizingMaskIntoConstraints = false
+
+        moveRadio = radioButton(title: "Move prompts to:", action: #selector(radioChanged))
+        moveRadio.state = .on
+
+        destinationPopUp = ThemedPopUp()
+        for d in destinations { destinationPopUp.addItem(withTitle: d) }
+        destinationPopUp.themeItems()
+
+        deleteRadio = radioButton(title: "Delete all prompts permanently", action: #selector(radioChanged))
+
+        let cancelButton = ThemedButton(title: "Cancel", style: .ghost, target: self, action: #selector(cancelTapped))
+        cancelButton.keyEquivalent = "\u{1b}"   // Esc
+        let confirmButton = ThemedButton(title: "Delete Folder", style: .destructive, target: self, action: #selector(confirmTapped))
+        confirmButton.keyEquivalent = "\r"        // ↵ default
+
+        [header, body, moveRadio, destinationPopUp, deleteRadio, cancelButton, confirmButton]
+            .forEach { content.addSubview($0) }
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: content.topAnchor, constant: pad),
+            header.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
+            header.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
+
+            body.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 8),
+            body.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
+            body.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
+
+            moveRadio.topAnchor.constraint(equalTo: body.bottomAnchor, constant: 16),
+            moveRadio.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
+
+            destinationPopUp.centerYAnchor.constraint(equalTo: moveRadio.centerYAnchor),
+            destinationPopUp.leadingAnchor.constraint(equalTo: moveRadio.trailingAnchor, constant: 8),
+            destinationPopUp.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
+            destinationPopUp.heightAnchor.constraint(equalToConstant: 26),
+
+            deleteRadio.topAnchor.constraint(equalTo: moveRadio.bottomAnchor, constant: 10),
+            deleteRadio.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
+
+            confirmButton.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
+            confirmButton.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -pad),
+            cancelButton.trailingAnchor.constraint(equalTo: confirmButton.leadingAnchor, constant: -8),
+            cancelButton.centerYAnchor.constraint(equalTo: confirmButton.centerYAnchor),
+        ])
+    }
+
+    @objc private func radioChanged(_ sender: NSButton) {
+        destinationPopUp.isEnabled = (sender == moveRadio)
+    }
+
+    @objc private func confirmTapped() {
+        if deleteRadio.state == .on {
+            finish(with: .deleteAll)
+        } else {
+            let dest = destinationPopUp.titleOfSelectedItem ?? "General"
+            finish(with: .moveTo(dest == "General" ? "" : dest))
+        }
+    }
+    @objc private func cancelTapped() { finish(with: nil) }
+
+    private func finish(with result: FolderDeleteAction?) {
+        if let host = sheet.sheetParent { host.endSheet(sheet) }
+        completion?(result)
+        completion = nil
+        DeleteFolderSheet.active = nil
+    }
+}
+
 // MARK: - ConfirmSheet
 
 /// Themed replacement for a destructive `NSAlert` — keeps the Library one cohesive surface, like

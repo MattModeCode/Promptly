@@ -524,7 +524,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func refreshResults() {
         let filtered = promptStore.filter(query)
         results = filtered
-        pinnedResults = filtered.filter { $0.pinned }
+        pinnedResults = PromptStore.sortedByHotkey(filtered.filter { $0.pinned })
         selectedIndex = 0
         rebuildPinnedCards()
         applyState()

@@ -28,7 +28,7 @@ extension LibraryScope {
         case .all:
             scoped = ranked
         case .pinned:
-            scoped = ranked.filter { $0.pinned }
+            scoped = PromptStore.sortedByHotkey(ranked.filter { $0.pinned })
         case .recent:
             scoped = Array(ranked.prefix(recentLimit))
         case .folder(let name):

@@ -80,6 +80,18 @@ func test_frecency_score_basics() {
     check(many > recent, "same recency, higher count → higher (\(many) > \(recent))")
 }
 
+func test_sorted_by_hotkey() {
+    print("\nTest — sortedByHotkey orders ⌘1…⌘9 ascending, unhotkeyed last in incoming order:")
+    let p1 = Prompt(name: "Three", keywords: [], body: "", filename: "three.md", pinned: true, hotkey: 3)
+    let p2 = Prompt(name: "One", keywords: [], body: "", filename: "one.md", pinned: true, hotkey: 1)
+    let p3 = Prompt(name: "NoKeyA", keywords: [], body: "", filename: "a.md", pinned: true)
+    let p4 = Prompt(name: "Two", keywords: [], body: "", filename: "two.md", pinned: true, hotkey: 2)
+    let p5 = Prompt(name: "NoKeyB", keywords: [], body: "", filename: "b.md", pinned: true)
+    let order = PromptStore.sortedByHotkey([p1, p2, p3, p4, p5]).map { $0.name }
+    check(order == ["One", "Two", "Three", "NoKeyA", "NoKeyB"],
+          "hotkeyed prompts ascend by number, unhotkeyed ones keep their incoming order (got \(order))")
+}
+
 func test_rank_orders_by_frecency() {
     print("\nTest — rank orders by frecency:")
     let now = Date(timeIntervalSince1970: 1_000_000_000)
@@ -346,6 +358,7 @@ enum TestMain {
         test_capture_like_payload()
         test_malformed_rejected()
         test_frecency_score_basics()
+        test_sorted_by_hotkey()
         test_rank_orders_by_frecency()
         test_rank_cold_start_keeps_seed_order()
         test_pinned_round_trips()

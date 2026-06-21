@@ -298,6 +298,20 @@ final class PromptStore {
         load()
     }
 
+    /// Deletes a folder: every prompt inside is either soft-deleted (mirrors `delete`) or moved to
+    /// `destination` (mirrors `move`, "" = root/General). Then removes the now-empty directory.
+    func deleteFolder(_ folder: String, moveTo destination: String?) {
+        let affected = prompts.filter { $0.folder == folder }
+        for prompt in affected {
+            if let destination {
+                move(prompt, toFolder: destination)
+            } else {
+                delete(prompt)
+            }
+        }
+        try? FileManager.default.removeItem(at: promptsDir.appendingPathComponent(folder))
+    }
+
     /// The leaf filename (no directory, no extension) `newSlug` expects as its `name` input —
     /// reuses the existing slug minting so a move gets the same folder-scoped collision safety
     /// as a fresh save.
@@ -454,6 +468,22 @@ final class PromptStore {
 
     /// The current hotkey slot→prompt map (conflict winners only).
     func hotkeyAssignment() -> [Int: Prompt] { Self.resolveHotkeys(prompts).hotkeys }
+
+    /// Orders prompts by ⌘-hotkey (1…9 ascending) first, then any without a hotkey, in their
+    /// incoming relative order. Used for the pinned strip so ⌘1 always renders before ⌘2, etc. —
+    /// a stable sort, since `sort(by:)` is not guaranteed stable but `Int?` comparisons here only
+    /// ever differentiate hotkeyed-vs-not or distinct hotkey numbers (hotkeys are unique post-
+    /// conflict-resolution), so ties never occur between two hotkeyed prompts.
+    static func sortedByHotkey(_ prompts: [Prompt]) -> [Prompt] {
+        prompts.sorted { lhs, rhs in
+            switch (lhs.hotkey, rhs.hotkey) {
+            case let (l?, r?): return l < r
+            case (nil, nil): return false
+            case (nil, _): return false
+            case (_, nil): return true
+            }
+        }
+    }
 
     /// Fuzzy-match + rank `prompts` against `query` (assumed non-empty). Pure and static so
     /// `LibraryScope.filter` (Stage 9) can reuse the exact same matching the palette uses,

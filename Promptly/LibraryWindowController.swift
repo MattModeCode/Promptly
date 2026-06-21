@@ -72,6 +72,7 @@ private final class SidebarRowCellView: NSTableCellView {
 private final class SidebarViewController: NSViewController {
     var onSelectScope: ((LibraryScope) -> Void)?
     var onNewFolder: (() -> Void)?
+    var onDeleteFolder: ((String) -> Void)?
 
     private var tableView: NSTableView!
     private var rows: [SidebarRowItem] = []
@@ -92,6 +93,14 @@ private final class SidebarViewController: NSViewController {
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("sidebar"))
         col.resizingMask = .autoresizingMask
         tableView.addTableColumn(col)
+
+        // Right-click "Delete Folder…" — only shown when the clicked row is a folder
+        // (see `menuNeedsUpdate`).
+        let menu = NSMenu()
+        menu.delegate = self
+        menu.addItem(withTitle: "Delete Folder…", action: #selector(deleteFolderMenuAction), keyEquivalent: "")
+        menu.items.first?.target = self
+        tableView.menu = menu
 
         let scroll = NSScrollView(frame: container.bounds)
         scroll.autoresizingMask = [.width, .height]
@@ -163,6 +172,26 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         case .newFolder: onNewFolder?()
         case .header: break
         }
+    }
+}
+
+extension SidebarViewController: NSMenuDelegate {
+    /// Only show "Delete Folder…" when the right-clicked row is an actual folder row.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let row = tableView.clickedRow
+        let isFolderRow: Bool
+        if row >= 0, row < rows.count, case .scope(.folder) = rows[row].kind {
+            isFolderRow = true
+        } else {
+            isFolderRow = false
+        }
+        menu.items.first?.isHidden = !isFolderRow
+    }
+
+    @objc fileprivate func deleteFolderMenuAction() {
+        let row = tableView.clickedRow
+        guard row >= 0, row < rows.count, case .scope(.folder(let name)) = rows[row].kind else { return }
+        onDeleteFolder?(name)
     }
 }
 
@@ -778,6 +807,7 @@ final class LibraryWindowController: NSWindowController {
             self?.refreshList()
         }
         sidebarVC.onNewFolder = { [weak self] in self?.createFolder() }
+        sidebarVC.onDeleteFolder = { [weak self] name in self?.confirmDeleteFolder(name) }
 
         listVC.onFilterChanged = { [weak self] _ in self?.refreshList() }
         listVC.onSelectPrompt = { [weak self] prompt in
@@ -815,6 +845,36 @@ final class LibraryWindowController: NSWindowController {
                                message: "Your edits to this prompt have not been saved.",
                                confirmTitle: "Discard",
                                completion: onResolved)
+    }
+
+    /// Right-click "Delete Folder…" on the sidebar. An empty (freshly-created, never-saved-into)
+    /// folder has nothing to lose — drop it from `freshlyCreatedEmptyFolders` with no sheet.
+    /// Otherwise ask whether to move its prompts elsewhere or delete them all (`DeleteFolderSheet`).
+    private func confirmDeleteFolder(_ name: String) {
+        let count = promptStore.prompts.filter { $0.folder == name }.count
+        guard count > 0 else {
+            freshlyCreatedEmptyFolders.remove(name)
+            if scope == .folder(name) { scope = .all }
+            refreshList()
+            return
+        }
+        guard let window else { return }
+        let otherRealFolders = Set(promptStore.prompts.map { $0.folder }).filter { !$0.isEmpty && $0 != name }
+        let otherFreshFolders = freshlyCreatedEmptyFolders.filter { $0 != name }
+        let destinations = ["General"] + otherRealFolders.union(otherFreshFolders).sorted()
+        let editingAffected = promptStore.prompts.first(where: { $0.filename == detailVC.selectedFilename })?.folder == name
+
+        DeleteFolderSheet().present(over: window, folderName: name, promptCount: count,
+                                    destinations: destinations) { [weak self] action in
+            guard let self, let action else { return }
+            switch action {
+            case .deleteAll: self.promptStore.deleteFolder(name, moveTo: nil)
+            case .moveTo(let dest): self.promptStore.deleteFolder(name, moveTo: dest)
+            }
+            if editingAffected { self.detailVC.load(prompt: nil) }
+            if self.scope == .folder(name) { self.scope = .all }
+            self.refreshList()
+        }
     }
 
     /// `PromptStore.onReload` fires on every load — both our own saves and external file
