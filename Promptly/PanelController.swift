@@ -174,7 +174,7 @@ private final class PinnedCardView: NSView {
 
 private final class PromptCellView: NSTableCellView {
     let label = NSTextField(labelWithString: "")
-    // Stage 7: trailing ⌥-number chip for the resting top-9 rows. Empty (zero-width) otherwise,
+    // Stage 7: trailing ⌘-number chip for the resting top-9 rows. Empty (zero-width) otherwise,
     // so a filtered row's title reclaims the full width.
     let slotLabel = NSTextField(labelWithString: "")
     init() {
@@ -296,8 +296,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var askPrompt: Prompt?
     private var isAsking: Bool { askFlow != nil }
 
-    // Stage 7: ⌥1–9 slot → prompt, FROZEN at present-time and held until dismiss (no live
-    // reshuffle — FEATURES §7). ⌥3 fires the same prompt for the whole appearance, even while
+    // Stage 7: ⌘1–9 slot → prompt, FROZEN at present-time and held until dismiss (no live
+    // reshuffle — FEATURES §7). ⌘3 fires the same prompt for the whole appearance, even while
     // the filter changes the visible rows.
     private var hudAssignment: [Int: Prompt] = [:]
     // Frozen alongside `hudAssignment` (same appearance, same freeze invariant) — filename →
@@ -478,7 +478,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         restoreBrowseChrome()
         filterField.stringValue = ""
         refreshResults()
-        // Freeze the ⌥1–9 assignment for this appearance — a hotkey is purely an explicit
+        // Freeze the ⌘1–9 assignment for this appearance — a hotkey is purely an explicit
         // per-prompt attribute now (no frecency autofill), so this is just the resolved
         // hotkey→prompt map, frozen so a Library-window edit mid-appearance can't retarget
         // what a number fires until the next open.
@@ -686,7 +686,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         commit(prompt)
     }
 
-    /// ⌥N — fire the prompt frozen at HUD slot N (Stage 7). Honors the freeze: works against the
+    /// ⌘N — fire the prompt frozen at HUD slot N (Stage 7). Honors the freeze: works against the
     /// at-present-time assignment regardless of the current filter, and is inert during ask mode.
     private func hudSelect(_ n: Int) {
         guard !committing, !isAsking, let prompt = hudAssignment[n] else { return }

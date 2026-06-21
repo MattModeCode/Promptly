@@ -655,7 +655,7 @@ private final class DetailViewController: NSViewController {
             promptStore.save(name: conflict.name, keywords: conflict.keywords, body: conflict.body,
                              folder: conflict.folder, pinned: conflict.pinned, hotkey: nil,
                              description: conflict.description, filename: conflict.filename)
-            warningLabel.stringValue = "⌥\(hotkey) was on '\(conflict.name)' — moved here"
+            warningLabel.stringValue = "⌘\(hotkey) was on '\(conflict.name)' — moved here"
             warningLabel.isHidden = false
         }
 

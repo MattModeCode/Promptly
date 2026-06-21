@@ -16,7 +16,7 @@ struct Prompt: Equatable {
     /// of `hotkey`. A prompt can be pinned with no hotkey, have a hotkey while unpinned, both, or
     /// neither.
     let pinned: Bool
-    /// Explicit ⌥-number (1…9) or nil. Never auto-assigned by frecency — a hotkey only ever
+    /// Explicit ⌘-number (1…9) or nil. Never auto-assigned by frecency — a hotkey only ever
     /// fires the prompt that explicitly declares it.
     let hotkey: Int?
     /// Optional one-line summary, shown in the Library list (Stage 8).
@@ -38,7 +38,7 @@ struct Prompt: Equatable {
     var title: String { name }
 }
 
-/// A hotkey collision surfaced at load: two files declared the same ⌥-number. Resolution is
+/// A hotkey collision surfaced at load: two files declared the same ⌘-number. Resolution is
 /// deterministic (lowest filename wins) and NON-destructive — the loser's file is left untouched;
 /// the Library window surfaces the conflict. Pure + Equatable so it is Tier-A testable.
 struct HotkeyConflict: Equatable {
@@ -428,7 +428,7 @@ final class PromptStore {
                       description: description)
     }
 
-    /// Valid ⌥-hotkey numbers (1...9).
+    /// Valid ⌘-hotkey numbers (1...9).
     static let hotkeySlots = 1...9
 
     // MARK: - Hotkey resolution (pure, testable)
