@@ -7,12 +7,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var promptStore: PromptStore!
     var panelController: PanelController!
     var accessibilityWindow: NSWindow?
-    var editorPanel: PromptEditorPanel?
+    var libraryWindow: LibraryWindowController?
     var axPollTimer: Timer?
+    /// Last-seen Accessibility trust, so we can spot the untrusted→trusted edge (see `refreshAXState`).
+    private var axTrusted = false
+    /// One-shot guard so the grant-relaunch fires exactly once per process.
+    private var didScheduleRelaunch = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
         registerFonts()
+        installEditMenu()
 
         promptStore = PromptStore()
         promptStore.load()
@@ -24,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleCommit(prompt, body: body)
         }
         panelController.onDismiss = {}
-        panelController.onEdit = { [weak self] prompt in self?.openEditor(editing: prompt) }
+        panelController.onEdit = { [weak self] prompt in self?.libraryWindowController().show(editing: prompt) }
 
         setupStatusItem()
 
@@ -32,8 +37,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyManager.onHotkey = { [weak self] in self?.onHotkey() }
         hotkeyManager.onCaptureHotkey = { [weak self] in self?.onCaptureHotkey() }
 
+        // Auto-detect an Accessibility grant made while we're running. macOS posts this system-wide
+        // distributed notification the instant AX settings change; the 2s poll is a fallback in case
+        // it doesn't fire. On the untrusted→trusted edge we relaunch, because the grant isn't honored
+        // by an already-running process — paste keeps failing until the app restarts.
+        axTrusted = AXIsProcessTrusted()
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(accessibilityChanged),
+            name: NSNotification.Name("com.apple.accessibility.api"), object: nil)
         axPollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            self?.updateAXStatusMenuItem()
+            self?.refreshAXState()
         }
     }
 
@@ -42,6 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func onHotkey() {
         guard AXIsProcessTrusted() else {
             showAccessibilityWindow()
+            return
+        }
+        if panelController.isPresented {
+            panelController.dismiss()
             return
         }
         guard let captured = Capture.captureFrontmostApp() else { return }
@@ -57,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard let captured = Capture.captureFrontmostApp() else { return }
         let selection = Capture.captureSelection(pid: captured.pid) ?? ""
-        openEditor(editing: nil, initialBody: selection)
+        libraryWindowController().showNewPrompt(initialBody: selection)
     }
 
     private func handleCommit(_ prompt: Prompt, body: String) {
@@ -102,6 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Hotkey: ⌥Space    Rebind…", action: #selector(rebindHotkey), keyEquivalent: ""))
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Library…", action: #selector(openLibrary), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "New Prompt…", action: #selector(newPrompt), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open prompts folder…", action: #selector(openPromptsFolder), keyEquivalent: ""))
         menu.addItem(.separator())
@@ -113,9 +131,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AXIsProcessTrusted() ? "Accessibility: ✓ Granted" : "⚠ Accessibility: Not granted — Fix…"
     }
 
-    func updateAXStatusMenuItem() {
+    @objc private func accessibilityChanged() {
+        // The distributed notification can arrive on a background thread — hop to main.
+        DispatchQueue.main.async { [weak self] in self?.refreshAXState(fromNotification: true) }
+    }
+
+    /// Re-reads live AX trust, refreshes the menubar icon + status menu, and — on the
+    /// untrusted→trusted edge — relaunches so the new grant actually takes effect (an
+    /// already-running process keeps failing to paste until it restarts). Driven by both the 2s
+    /// poll and the `com.apple.accessibility.api` notification.
+    func refreshAXState(fromNotification: Bool = false) {
+        let trusted = AXIsProcessTrusted()
         statusItem.menu?.item(withTag: 100)?.title = axStatusTitle()
         updateStatusIcon()
+
+        guard !didScheduleRelaunch else { return }
+        let grantedNow = trusted && !axTrusted
+        // Stale-read safeguard: some setups return a stale `false` to the running process even after
+        // the grant. If the permission window is on screen (user is mid grant-flow) and an
+        // AX-settings change just fired, treat it as our grant and relaunch anyway.
+        let staleButLikelyGranted = fromNotification && !trusted && (accessibilityWindow?.isVisible ?? false)
+        axTrusted = trusted
+        if grantedNow || staleButLikelyGranted {
+            relaunchForAccessibility()
+        }
+    }
+
+    /// Relaunch ourselves so a just-granted Accessibility permission takes effect. Waits for this
+    /// process to fully exit before reopening, so the old instance releases the Carbon hotkey before
+    /// the new one registers it. Gated to a single untrusted→trusted edge, so it can't loop.
+    private func relaunchForAccessibility() {
+        didScheduleRelaunch = true
+        (accessibilityWindow as? AccessibilityPermissionWindow)?.showGrantedState()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            let path = Bundle.main.bundlePath
+            let pid = ProcessInfo.processInfo.processIdentifier
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/sh")
+            task.arguments = ["-c", "while /bin/kill -0 \(pid) >/dev/null 2>&1; do /bin/sleep 0.2; done; /usr/bin/open \"\(path)\""]
+            try? task.run()
+            NSApp.terminate(nil)
+        }
     }
 
     @objc private func rebindHotkey() {
@@ -125,17 +181,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
-    @objc private func newPrompt() { openEditor(editing: nil) }
+    @objc private func openLibrary() { libraryWindowController().showLibrary() }
+    @objc private func newPrompt() { libraryWindowController().showNewPrompt() }
 
-    private func openEditor(editing prompt: Prompt? = nil, initialBody: String? = nil) {
-        let editor = PromptEditorPanel(editing: prompt, initialBody: initialBody)
-        editor.onSave = { [weak self] name, keywords, body in
-            self?.promptStore.save(name: name, keywords: keywords, body: body,
-                                   filename: prompt?.filename ?? "")
-        }
-        editor.makeKeyAndOrderFront(nil)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        editorPanel = editor
+    /// Lazily created, reused — the Library window is a singleton surface (Stage 9).
+    private func libraryWindowController() -> LibraryWindowController {
+        if let existing = libraryWindow { return existing }
+        let window = LibraryWindowController(promptStore: promptStore)
+        window.onWillShow = { [weak self] in self?.panelController.dismiss() }
+        libraryWindow = window
+        return window
     }
 
     @objc private func openPromptsFolder() {
@@ -157,11 +212,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    /// Root-cause fix for copy/paste: as a menu-bar (.accessory) app, Promptly never builds an
+    /// `NSApp.mainMenu`. The status-bar dropdown (`buildMenu()`/`statusItem.menu`) is a
+    /// different thing and supplies no Edit-menu key equivalents — without one, ⌘C/⌘V/⌘X have
+    /// no key equivalent to dispatch through, so they silently do nothing in any text field
+    /// anywhere in the app. This menu is never visually drawn (the app stays `.accessory`); it
+    /// exists purely so AppKit's key-equivalent dispatch finds the standard selectors and routes
+    /// them to the first responder, which `NSTextField`/`NSTextView` already implement natively.
+    private func installEditMenu() {
+        let mainMenu = NSMenu()
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenuItem.submenu = editMenu
+
+        NSApplication.shared.mainMenu = mainMenu
+    }
 }
 
 // MARK: - Accessibility Permission Window
 
 final class AccessibilityPermissionWindow: NSWindow {
+    private var bodyLabel: NSTextField!
+    private var actionButton: NSButton!
+
     init() {
         let w: CGFloat = 420, h: CGFloat = 230
         let rect = NSRect(x: 0, y: 0, width: w, height: h)
@@ -191,11 +275,20 @@ final class AccessibilityPermissionWindow: NSWindow {
                               frame: NSRect(x: w/2 - 130, y: 28, width: 260, height: 32))
         btn.target = self
         btn.action = #selector(openSettings)
+        bodyLabel = body
+        actionButton = btn
 
         content.addSubview(titleLabel)
         content.addSubview(body)
         content.addSubview(btn)
         contentView = content
+    }
+
+    /// Swap to a confirmation state while the app relaunches to pick up the new grant
+    /// (`AppDelegate.relaunchForAccessibility`).
+    func showGrantedState() {
+        bodyLabel.stringValue = "✓ Accessibility granted.\n\nRestarting Promptly…"
+        actionButton.isHidden = true
     }
 
     private func label(_ text: String, font: NSFont, color: NSColor, frame: NSRect) -> NSTextField {

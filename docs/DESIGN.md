@@ -160,8 +160,32 @@ Flat, one file each. Keep it minimal but clean.
 | `HotkeyManager` | Registers ⌥Space (Carbon), fires a closure. Mechanism swappable behind one protocol. |
 | `PanelController` | Owns the `.nonactivatingPanel`, the filter field, the results list. `present(captured:)` / `dismiss()`. **Opaque `#0f0f14` content view at 6px radius — NOT `NSVisualEffectView`; bundle + register JetBrains Mono (fallback `.monospacedSystemFont`). Visual system: FEATURES §0.** Also owns: the **fixed-height 6-row scrolling viewport** (scroll-past-6, clamp at full-list ends — FEATURES §1), the **zero-prompts state** (A0) and persistent footer (FEATURES §2), screen targeting per **invariant 4**, and the **Reduce-Motion / Increase-Contrast / VoiceOver** behavior (FEATURES §9). `present(captured:)` takes the captured app's screen, not just the app. |
 | `PasteService` | The spike's two strategies + capability probe + read-back, behind one `paste(_:into:) -> Result`. **Only module that must not drift from spike behavior — extract it verbatim.** |
-| `PromptStore` | Loads markdown-per-file prompts (§7), live-reload, in-memory `[Prompt]` + fuzzy filter. No DB. |
+| `PromptStore` | Loads markdown-per-file prompts (§7) **recursively** (subfolders = folders, §7.1), live-reload via **FSEvents** (§7.2), in-memory `[Prompt]` + fuzzy filter, frecency ranking, and pure pin resolution (`resolvePins`, §7.3). No DB. |
+| `HudRow` | Pure ⌥1–9 slot assignment: hybrid pins-then-frecency `assign(pins:ranked:)` (§7.4). UI-free so it is Tier-A testable. |
 | `Capture` | Thin wrapper for the `frontmostApplication` snapshot, so ordering (invariant 1) is enforced in one place. |
+
+### 5.1 The off-paste-path window invariant (Stage 9)
+
+The Library window (`LibraryWindowController`, Stage 9 — not yet built; full layout spec in
+[stages/STAGE-9-library-window.md](stages/STAGE-9-library-window.md)) is a **normal activating
+`NSWindow`** — titled, resizable, and explicitly *allowed* to take real keyboard focus. That looks
+like a violation of the project's "never steal focus" framing, so name precisely why it isn't:
+
+**That framing exists to protect the ⌥Space paste loop specifically.** Stealing focus is fatal there
+because the loop must paste back into the *captured* host app (invariants 1–2): if our own UI becomes
+key, the captured target is wrong and the paste lands in the panel. The Library window is **entirely
+off that loop** — it never calls `Capture`, never calls `PanelController.present()`, never calls
+`PasteService`. It only browses, searches, creates, edits, organizes, and pins, writing through
+`PromptStore` (which writes files + reloads). Because it never pastes into another app, capture-
+before-show is irrelevant to it, and there is no host-app focus to protect. The fast ⌥Space palette
+(`PanelController`, a `.nonactivatingPanel`) is untouched and remains the only focus-sensitive
+surface.
+
+This window also **replaces the modal `PromptEditorPanel`**: its detail pane becomes the single
+editor, and `PromptEditorPanel` is retired in Stage 9 (the full window decomposition — sidebar/list/
+detail, `NSSplitViewController` tuning, scope model — lives in that stage file, not here). The
+architectural invariant DESIGN owns is the one above: *a surface is allowed to take focus iff it is
+off the paste loop.*
 
 ---
 
@@ -192,6 +216,8 @@ is a little custom frontmatter parsing.
 ---
 name: PR description
 keywords: [pr, pull request, diff]
+pin: 3
+description: Structured diff summary for a PR
 ---
 Summarize this diff for a PR description. Cover: what changed, why, risk, and how to test.
 
@@ -200,12 +226,111 @@ Summarize this diff for a PR description. Cover: what changed, why, risk, and ho
 
 - `name` — the search label (required).
 - `keywords` — optional fuzzy aliases.
+- `pin` — optional `Int` 1–9: the manually-claimed ⌥-number (Stage 8). Absent = unpinned.
+  Out-of-range or garbage values parse to `nil` (unpinned), never an error — the valid set mirrors
+  `HudRow.slotCount` and is held as `PromptStore.pinSlots = 1...9`.
+- `description` — optional single line, surfaced in the Library list (Stage 9). Emitted only when
+  non-empty.
 - body — the prompt text, may contain tokens.
-- **Live-reload:** a `DispatchSource` file-watcher (no dependency) reloads the in-memory array on
-  save — the cheapest possible CRUD, buys months of runway before stage-2 in-app CRUD.
+- **`pin`/`description` are emitted only when present** (`serialize`), so an unpinned/undescribed
+  file stays byte-clean — no spurious keys appear when an existing flat prompt is saved through the
+  editor for an unrelated reason.
 - **Fail loudly on load:** bad frontmatter / unreadable file → menu-bar alert + a logged line
   (filename); duplicate `name` → logged warning. ~90% of a linter's value at the load site, with
   nothing to maintain. A real lint is deferred until ~50 prompts or first sharing.
+
+### 7.1 Folders are subdirectories, not frontmatter (Stage 8)
+
+A prompt's **folder is derived from its parent directory** under `~/Prompts/`, never written to
+frontmatter: `~/Prompts/Engineering/foo.md` → `folder = "Engineering"`; a root-level file →
+`folder = ""`. The directory *is* the folder — there is no second source of truth to drift, and
+organizing the library is plain Finder/`mv`, not an editor round-trip. `Prompt` gains `folder`,
+`pinnedSlot`, and `description`; `title` is a UI alias for `name` (the frontmatter key stays `name`).
+
+**`filename` is now a path relative to `~/Prompts`** (`"foo.md"` or `"Engineering/foo.md"`), and it
+is simultaneously (a) the usage/frecency dict key, (b) the dedup key, and (c) the file locator. That
+triple duty drives the migration guarantee:
+
+- **Existing flat prompts are unaffected.** A root file keeps its bare `"foo.md"` filename, so its
+  usage key is byte-identical to the Stage-1…7 key — frecency history carries over with no migration
+  step. Old files are never rewritten on load; they gain `pin:`/`description:` only when next saved
+  through the editor.
+- **A folder *move* must migrate the usage key.** Moving a prompt changes its relative path, hence
+  its `filename`, hence its usage key. The move operation (`PromptStore.move(_:toFolder:)`, Stage 9)
+  must carry `usage[old] → usage[new]` or frecency silently resets to zero for that prompt — a
+  data-loss bug that looks like "it just dropped down the list."
+
+### 7.2 Recursive scan + FSEvents watch (Stage 8)
+
+The Stage-1-era loader walked only the top level: `contentsOfDirectory` for the initial load and a
+single-fd `DispatchSource` watch on `~/Prompts` itself. Subfolders are invisible to both. Stage 8
+replaces them:
+
+- **Initial load → `FileManager.enumerator`** (recursive, `[.skipsHiddenFiles,
+  .skipsPackageDescendants]`), collecting every `.md` under the tree in a stable path-sorted order
+  (load order is deterministic — frecency cold-start and dedup both lean on it). Each file's relative
+  path becomes its `filename`; the parent component becomes its `folder`. The first-launch seed check
+  counts the *whole* tree, so a library living entirely in subfolders is not mistaken for empty and
+  re-seeded.
+- **Live reload → an `FSEventStream`** rooted at `~/Prompts` (`kFSEventStreamCreateFlagFileEvents`,
+  ~200ms latency to coalesce a burst — e.g. a multi-file move — into one reload), dispatched to the
+  main queue, calling `load()`. This sees the whole subtree, which the single-fd source could not.
+- **Self-write suppression.** `save()`/`delete()` write the file *and* call `load()` directly, then
+  set a brief `suppressReloadUntil` window (~0.3s); the FSEvents callback ignores events inside that
+  window so an in-app edit doesn't trigger a redundant second reload. External edits (Finder, an
+  editor) fall outside the window and still reload normally.
+
+`load()` ends by firing an optional `onReload` hook — no subscriber in Stage 8; the Stage 9 Library
+window uses it to refresh sidebar counts and the list. (CoreServices is linked for `FSEventStream`.)
+
+### 7.3 Pin resolution — deterministic and non-destructive (Stage 8)
+
+Two files can declare the same `pin:`. Resolution is a **pure** function so it is Tier-A testable
+without a filesystem:
+
+```
+static func resolvePins(_ prompts: [Prompt]) -> (pins: [Int: Prompt], conflicts: [PinConflict])
+```
+
+- **Lowest `filename` wins** a contested slot (a stable, content-independent tiebreak). The loser is
+  reported as a `PinConflict(slot, winner, loser)` and **treated as unpinned for assignment**.
+- **The loser's file is left untouched on disk** — no silent rewrite at load. A load is read-only
+  with respect to the prompt files; the only place a `pin:` is rewritten is a *user-initiated* steal
+  in the Library editor (Stage 9). `pinnedAssignment()` wraps `resolvePins().pins`; the Library
+  surfaces the conflicts.
+
+This is the load-time guarantee that pairs with the hybrid HUD assignment in §7.4: a conflicted pin
+contributes nothing to the frozen slot map beyond its winner, and nothing on disk changes behind the
+user's back.
+
+### 7.4 Hybrid HUD assignment + the freeze invariant (Stage 8)
+
+Stage 7 made the ⌥1–9 HUD *adaptive*: fixed positions, contents auto-sorted by frecency ("a
+keyboard, not a piano"). Stage 8 layers manual pins on top without replacing that — a single pure
+function in `HudRow`:
+
+```
+static func assign(pins: [Int: Prompt], ranked: [Prompt]) -> [Int: Prompt]
+```
+
+- **Pins claim their chosen slot first**; the frecency `ranked` ordering fills only the slots that
+  remain. A pinned prompt is removed from the fill stream (deduped by `filename`) so it never also
+  appears in a frecency-filled slot. Pure, deterministic (identical `(pins, ranked)` → identical
+  map), 1-based, capped at 9. With empty `pins` it degrades exactly to the Stage-7 behavior — the
+  regression anchor.
+
+**This composes with the Stage-7 freeze invariant; it does not weaken it.** The assignment is still
+computed **once per panel appearance** in `PanelController.present()` and held constant until
+dismiss — ⌥3 fires the same prompt for the whole appearance even while the filter changes the visible
+rows. Stage 8 extends the frozen state by one item: **which filenames are pinned** is also snapshotted
+at `present()`, alongside the slot map. Concretely, `present()` freezes three derived maps together
+(`hudAssignment`, `hudSlotByFilename`, `hudPinnedFilenames`) from one read of the store, so a pin
+that changes on disk mid-appearance cannot diverge the chip from the key it fires. The chip in
+`PromptCellView.configure` reads from those frozen maps: it shows `⌥N` when the query is empty **or**
+the prompt is pinned (a pin is a persistent promise, so its chip survives filtering), and styles a
+pinned chip as "permanent" (brighter primary, medium weight) versus a frecency-filled "today's guess"
+(dim footer, regular weight). This is a draw-and-data change only — no height or resize math is
+touched, so the ask-mode frame-freeze (§6) is untouched.
 
 ---
 

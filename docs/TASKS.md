@@ -149,6 +149,46 @@ content adapts only between opens.
 
 ---
 
+## Stage 8 — Folders, manual pins, descriptions
+
+**Exit criterion:** you can pin a prompt to a chosen ⌥-number and it holds there as a persistent,
+distinctly styled chip — visible even while filtering — while every slot you didn't pin still adapts
+by frecency; prompts organize into real `~/Prompts` subfolders that load and live-reload recursively;
+a duplicate pin resolves deterministically without rewriting either file.
+
+- [x] `Prompt` carries `folder`/`pinnedSlot`/`description`; `filename` relative to `~/Prompts` with flat-prompt usage-key back-compat; `resolvePins` resolves conflicts deterministically and non-destructively; `HudRow.assign(pins:ranked:)` is hybrid (pins first, frecency fills the gaps, no double-appearance, freeze rule intact); chips render from state frozen once per appearance, pinned styled distinctly (bright/medium) from frecency-filled (dim/regular); recursive scan + FSEvents watch (coalesced, self-write-suppressed) replace the top-level `DispatchSource`.
+- [ ] **Manual verification (author / Tier B):** `pin: 3` in a prompt's frontmatter shows a styled ⌥3 that pastes on ⌥3, while an unpinned slot still auto-fills by frecency; a subfolder prompt loads and live-reloads; two files with `pin: 3` resolve to a deterministic winner with neither file rewritten.
+
+---
+
+## Stage 9 — Three-pane Library window
+
+**Exit criterion:** you open the Library from the menu bar and manage a real, growing catalog there
+— browse by folder/scope, search, create/edit/delete, set pins, reorganize into folders — and the
+file on disk always matches what you did, with `used N×` history surviving a folder move and a pin
+steal warning when you take an occupied ⌥-number. The modal `PromptEditorPanel` is gone; this is the
+one editor. Because the window never pastes — it never calls `Capture`, `present()`, or
+`PasteService` — it can take focus freely without ever touching the ⌥Space paste loop or the
+~700ms feel.
+
+- [ ] Three-pane `NSSplitViewController` window (sidebar/list/detail) opened from the menu bar, off the paste loop; `Palette` extracted into a shared `Promptly/Palette.swift`; `PromptStore.move(_:toFolder:)` renames across folders and migrates the usage key; pin/hotkey conflicts resolve by a **user-initiated steal** (clear the prior holder's `pin:`, rewrite, inline warning — distinct from Stage 8's silent load-time handling); `PromptEditorPanel` retired; `main.swift` routes `Library…`/`New Prompt…`/`onEdit`/⌥⇧Space inverse-capture to the window.
+- [ ] **Manual verification (author / Tier B):** split-pane min sizes never collapse to zero; live refresh doesn't clobber an in-progress edit; a pin steal shows the inline warning and rewrites the previous holder's file; a folder move preserves `used N×` history; the Library window taking focus does not affect ⌥Space paste-into-other-apps.
+
+---
+
+## Stage 10 — Library polish / folder management
+
+**Exit criterion:** the library is maintainable entirely from inside the window — folders can be
+created and renamed (with usage history surviving the rename), prompts can be dragged between
+folders, emptied folders quietly drop off the sidebar, a pin conflict is always explained inline, and
+the usage line reads as a human "last used 2h ago" — all without ever touching the ⌥Space paste loop
+or the half-second feel.
+
+- [ ] `PromptStore.renameFolder`/pure `rewriteFolderPath` (path rewrite + usage-key migration, whole-folder); drag-to-move via the existing `PromptStore.move`; empty-folder sidebar rows derive from loaded prompts (drop at next reload, disk left alone; freshly-created-but-empty folders stay visible until acted on); inline pin-conflict banner surfaces Stage 8's silent `resolvePins` conflicts (render-only — no new resolution logic, distinct from Stage 9's steal); pure `RelativeTime.format(_:now:)` for the `used N× · last used …` line.
+- [ ] **Manual verification (author / Tier B):** folder rename rewrites every child file and preserves usage history; drag-to-move moves the file and keeps history; a just-created empty folder stays visible while a genuinely emptied one disappears; the pin-conflict banner shows on the loser and clears once resolved; the usage line reads naturally as a prompt is used.
+
+---
+
 ## The real test (after Stage 1)
 
 One week of daily personal use. If you reach for ⌥Space **reflexively**, it crossed over — that's

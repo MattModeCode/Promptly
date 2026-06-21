@@ -305,6 +305,108 @@ opens. Shown as a thin persistent strip, numerals dominant.
   ⌥1 Standup   ⌥2 PR desc   ⌥3 Bug triage   ⌥4 Review   ⌥5 Cold intro   …   ⌥9 Cheatsheet
 ```
 
+### Stage 8 — Manual pinning ("a keyboard you can also relabel")
+Stage 7's ⌥1–9 are auto-sorted by frecency. Stage 8 lets the user **pin** up to 9 prompts to a
+chosen ⌥-number (frontmatter `pin: 3`). **Hybrid rule:** a pin claims its exact number first; any
+slot left unpinned auto-fills from the existing frecency assignment. ⌥1–9 stay **palette-only** —
+no new global hotkeys, no height/resize math touched (a draw-only chip change over the frozen HUD map).
+
+A **pinned chip reads differently from a frecency chip** — "permanent promise" vs. "today's guess".
+The pinned chip is drawn as a filled/bracketed pill in primary text; the frecency chip is bare,
+dim footer text:
+
+```
+   ┌──────────────────────────────────────────────────────────┐
+   │  Search prompts…                                          │
+   ├──────────────────────────────────────────────────────────┤
+   │ ▸ Bug report triage         file a structured bug …  ▐⌥3▌ │  ← PINNED: filled pill, primary text
+   │   Cold outreach             short intro to a founder…  ⌥5 │  ← frecency: bare, dim footer
+   │   PR description            summarize the diff, risk…  ⌥1 │  ← frecency: bare, dim footer
+   └──────────────────────────────────────────────────────────┘
+           ↑/↓ move · ↵ paste · esc dismiss
+```
+
+**The pin shows even while filtering.** A frecency chip only appears in the resting empty-query
+state (it's a guess about *now*); a pinned chip shows in **both** the empty state and mid-filter,
+because the pin is a persistent promise the hand can trust regardless of what's typed:
+
+```
+   query "co" — frecency chips suppressed, but the pinned chip persists
+   ┌──────────────────────────────────────────────────────────┐
+   │  co                                                       │
+   ├──────────────────────────────────────────────────────────┤
+   │ ▸ Cold outreach             short intro to a founder…     │  ← frecency chip gone while filtering
+   │   Code review pass          review this diff for …   ▐⌥3▌ │  ← PINNED: chip still shown
+   └──────────────────────────────────────────────────────────┘
+```
+
+**Conflict (two prompts pin the same number):** deterministic winner keeps the slot, the loser is
+treated as unpinned for this appearance — **neither file is silently rewritten** (the surfaced
+warning belongs to the Library window, Stage 10). Out-of-range pins are ignored.
+
+### Stage 9 — Three-pane Library window
+A growing library outgrows a one-line palette. Stage 9 adds a **management window** — sidebar |
+list | detail — opened from the menu bar. Its detail pane **replaces** the modal prompt editor.
+
+**Off-paste-path invariant:** unlike the palette, this is a **normal, focus-taking app window**.
+That is safe *precisely because it never pastes into another app* — it only browses, searches,
+creates, edits, organizes, and pins. It never calls capture / present / the paste service, so the
+"never steal focus" discipline (which exists only to protect a paste into the frontmost app) simply
+does not apply here. The fast ⌥Space palette and the ~700ms loop are untouched.
+
+```
+   ┌─────────────────┬──────────────────────────┬─────────────────────────────────────┐
+   │ ▪ all        7  │  ⌕ Filter…               │  title                              │
+   │ ★ pinned     3  │ ┌──────────────────────┐ │  ┌───────────────────────────────┐  │
+   │ ◷ recent        │ │ Bug report template  │ │  │ Bug report template           │  │
+   │                 │ │ Structured repro for │ │  └───────────────────────────────┘  │
+   │ folders         │ │ filing issues        │ │  folder            pin     hotkey   │
+   │ ▸ Engineering 3 │ ├──────────────────────┤ │  ┌────────────┐  ( ●) ┌──────────┐  │
+   │ ▸ Comms       2 │ │ Code review checklist│ │  │ Engineering▾│       │ ⌥1       │  │
+   │ ▸ Writing     2 │ │ What to check before │ │  description                        │
+   │ + new folder    │ │ approving a PR       │ │  ┌───────────────────────────────┐  │
+   │                 │ ├──────────────────────┤ │  │ Structured repro for filing … │  │
+   │                 │ │ Explain this code    │ │  └───────────────────────────────┘  │
+   │                 │ │ Walk through a       │ │  body  supports {{clipboard}},      │
+   │                 │ │ snippet step by step │ │        {{date}}, {{cursor}}         │
+   │                 │ └──────────────────────┘ │  ┌───────────────────────────────┐  │
+   │                 │                          │  │ ## Summary                    │  │
+   │                 │                          │  │ ## Steps to reproduce         │  │
+   │                 │                          │  │ ## Expected                   │  │
+   │                 │                          │  └───────────────────────────────┘  │
+   │                 │                          │  used 42× · last used 2h ago        │
+   │                 │                          │                        [ delete ]   │
+   └─────────────────┴──────────────────────────┴─────────────────────────────────────┘
+```
+
+- **Left — sidebar:** `all` / `pinned` / `recent` (with counts), a `folders` header with one row per
+  real subdirectory of `~/Prompts/` (each counted), and `+ new folder`. Folders are real dirs, not tags.
+- **Middle — list:** a `Filter…` field over the selected scope; two-line cards (title + description).
+- **Right — detail (the editor):** title; a row of folder dropdown + `pin` toggle + editable hotkey
+  field; description; body textarea (tokens supported); a `used N× · last used …` line; red `delete`.
+
+**Pin/hotkey conflicts resolve by a user-initiated steal.** Turning the pin toggle on with a number
+already held by another prompt clears that prompt's `pin:` (rewriting its file), claims the slot for
+the one being edited, and shows an inline warning: `⌥3 was on 'X' — moved here`. This is deliberately
+destructive — distinct from Stage 8's *silent, non-destructive* load-time conflict handling (which
+never rewrites a file). At load nothing is touched; here the user explicitly asked to take the slot,
+so the editor rewrites it and says so.
+
+Same Mattmode Mono surface as the palette — see §8.
+
+### Stage 10 — Library polish
+No new mockup (same window). Adds: **drag-to-move** a prompt between sidebar folders; **folder
+rename**; an **inline pin-conflict banner** that surfaces Stage 8's *silent* load-time conflict (two
+files on disk declaring the same `pin:` — the deterministic loser is unpinned for assignment but its
+file is never touched) — this is render-only, the opposite of Stage 9's steal: nothing is rewritten,
+the banner just tells the loser's editor "⌥3 is already on 'X'" so a human can resolve it; and
+**relative-time** usage display (`"2h ago"`, `"yesterday"`, `"3d ago"`) replacing a raw timestamp.
+
+For the forward execution specs, see
+[`stages/STAGE-8-pinning.md`](stages/STAGE-8-pinning.md),
+[`stages/STAGE-9-library-window.md`](stages/STAGE-9-library-window.md),
+[`stages/STAGE-10-library-polish.md`](stages/STAGE-10-library-polish.md).
+
 ---
 
 ## 8. Visual-artifact policy
@@ -318,6 +420,10 @@ The one pixel-accurate render is the approved `/design-shotgun` output (§0):
 `~/.gstack/projects/MattModeCode-ai-prompt-shortcut-app/designs/main-palette-20260619/`). Treat it
 as the visual source of truth for the palette; the ASCII states above show layout/behavior, the
 render shows the look.
+
+The Library window (§7, Stage 9) is a **second surface** but not a second visual language: it reuses
+the same Mattmode Mono `Palette` token set (extracted into a shared file so panel and window can't
+drift) — opaque, monochrome, JetBrains Mono, dark only. Its ASCII mockup above is the only spec it gets.
 
 ---
 

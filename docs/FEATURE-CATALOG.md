@@ -25,7 +25,7 @@ Tokens (colors, type, spacing) are **single-sourced in [FEATURES §0](FEATURES.m
 
 ---
 
-## 2. Committed features (stages 0–7)
+## 2. Committed features (stages 0–10)
 
 ### Stage 0 — Spike (the paste loop) · **HARD GATE** · [stage file](stages/STAGE-0-spike.md)
 
@@ -117,6 +117,32 @@ Tokens (colors, type, spacing) are **single-sourced in [FEATURES §0](FEATURES.m
 | Fixed 9 positions; content reorders by app/time; no live reshuffle | FEATURES §7, TASKS Stage 7 | Number is the constant the hand learns. |
 | Row reflow to add trailing ⌥-number chip column | FEATURES §1 | One-time geometry change (MVP collapses the chip column). |
 
+### Stage 8 — Manual pinning + folders · [stage file](stages/STAGE-8-pinning.md)
+
+| Feature | Owner | Notes |
+|---------|-------|-------|
+| Manual `pin:` / `description:` frontmatter | DESIGN §7, STAGE-8 | Hybrid over Stage-7 adaptive HUD: pins claim their slot first, frecency fills the rest; ⌥1–9 stay palette-only (no new hotkeys). |
+| Folders as real subdirectories under `~/Prompts/` | DESIGN §7, STAGE-8 | Folder derived from parent dir, never frontmatter; recursive scan + `FSEventStream` watch replaces the old top-level `DispatchSource`. |
+| Deterministic non-destructive pin-conflict resolution (`resolvePins`) | DESIGN §7, STAGE-8 | Lowest-`filename` winner; loser treated as unpinned for assignment, file left untouched (no silent rewrite). |
+| Palette pinned chip styling (pin chip distinct from frecency chip) | FEATURES §1/§7, STAGE-8 | Draw-only: pinned chip shows even while filtering; no height/resize math touched. |
+
+### Stage 9 — Three-pane Library window · [stage file](stages/STAGE-9-library-window.md)
+
+| Feature | Owner | Notes |
+|---------|-------|-------|
+| Three-pane management window (sidebar / list / detail) | DESIGN §7, STAGE-9 | `NSSplitViewController`; its detail pane **replaces** the modal `PromptEditorPanel`. |
+| Off-paste-path safety property | DESIGN §7, STAGE-9 | Never calls `Capture`/`present()`/`PasteService` — that's *why* it's allowed to take focus (the ⌥Space palette is untouched). |
+| Folder create / move via the window | DESIGN §7, STAGE-9 | `PromptStore.move(_:toFolder:)` renames across dirs and migrates the usage key so frecency survives a reorganize. |
+
+### Stage 10 — Library polish · [stage file](stages/STAGE-10-library-polish.md)
+
+| Feature | Owner | Notes |
+|---------|-------|-------|
+| Drag-to-move between sidebar folders | STAGE-10 | — |
+| Folder rename (path rewrite + usage-key migration) | STAGE-10 | — |
+| Inline pin-conflict warning UI | STAGE-10 | "⌥3 was on 'X' — moved here" on a user-initiated steal. |
+| Relative-time usage display ("2h ago" / "3d ago") | STAGE-10 | Pure `RelativeTimeTests`-backed formatting on the `used N×` line. |
+
 ---
 
 ## 3. Candidate parking lot (not committed)
@@ -128,7 +154,6 @@ non-goal)** are also in §4 / [PRD §7](PRD.md#7-non-goals-explicit); they are
 
 | Candidate | What would pull it in |
 |-----------|------------------------|
-| Prompt tags / categories / folders | The flat library gets big enough that fuzzy-by-name stops being enough to find things. |
 | Import / export "prompt pack" | First time you want to move prompts between machines or share a set. |
 | Prompt preview pane | A row's snippet stops being enough to tell two similar prompts apart before ↵. |
 | Search/usage history view | You want to re-fire something you used yesterday but can't recall its name. |
@@ -140,7 +165,6 @@ non-goal)** are also in §4 / [PRD §7](PRD.md#7-non-goals-explicit); they are
 | Onboarding tour | Same — a non-author user needs more than the lazy Accessibility window. |
 | Usage analytics / telemetry | You want data to *tune* ordering — but note Principle 2 ("judgment not configurable"). |
 | Light theme / theming | Mattmode Mono is **dark-only** today; a light-environment need would force the token set to fork. |
-| In-app settings window | *(currently a non-goal)* The menu-bar dropdown stops holding the few real controls. |
 | iCloud / Git / cloud sync | *(currently a non-goal)* The visible local folder stops being a sufficient "sync". |
 | Cross-platform (Windows/Linux/web) | *(currently a non-goal)* — would break the native never-steal-focus bar; effectively a different product. |
 | SQLite / GRDB / FTS5 | *(ask-first)* In-memory filter latency is *actually* felt (premature <80 prompts) — this is the Stage 6 boundary. |
@@ -154,7 +178,7 @@ non-goal)** are also in §4 / [PRD §7](PRD.md#7-non-goals-explicit); they are
 Mirrored here so the catalog is self-contained; **PRD §7 is canonical** — if these
 drift, fix the mirror.
 
-- **No settings panel / preferences window.** (Menu-bar dropdown holds the few real controls only.)
+- **No tunable judgment.** No settings/preferences for the system's behavior — frecency/adaptive ordering stay non-configurable; the menu-bar dropdown holds the few real controls. (A management window for browsing/organizing/editing the library *is* in scope — it never pastes, so it can't threaten the half-second or focus.)
 - **No cloud, no account, no sync** in the foreseeable scope. (A visible local prompt folder is the "sync.")
 - **No cross-platform.** macOS only; native is required, not preferred.
 - **No SQLite/GRDB/FTS5** until the library is large enough to actually need it (premature at <80 prompts).

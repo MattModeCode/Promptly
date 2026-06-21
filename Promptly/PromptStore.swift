@@ -12,19 +12,25 @@ struct Prompt: Equatable {
     /// Derived from the file's parent directory: "" for a root prompt, else "Engineering".
     /// Never serialized to frontmatter — the directory IS the folder (Stage 8).
     let folder: String
-    /// Manually pinned ⌥-number (1…9) or nil. Pins claim their slot first; frecency fills the rest.
-    let pinnedSlot: Int?
+    /// Shows in the "pinned" section of the palette/Library — purely organizational, independent
+    /// of `hotkey`. A prompt can be pinned with no hotkey, have a hotkey while unpinned, both, or
+    /// neither.
+    let pinned: Bool
+    /// Explicit ⌥-number (1…9) or nil. Never auto-assigned by frecency — a hotkey only ever
+    /// fires the prompt that explicitly declares it.
+    let hotkey: Int?
     /// Optional one-line summary, shown in the Library list (Stage 8).
     let description: String?
 
     init(name: String, keywords: [String], body: String, filename: String,
-         folder: String = "", pinnedSlot: Int? = nil, description: String? = nil) {
+         folder: String = "", pinned: Bool = false, hotkey: Int? = nil, description: String? = nil) {
         self.name = name
         self.keywords = keywords
         self.body = body
         self.filename = filename
         self.folder = folder
-        self.pinnedSlot = pinnedSlot
+        self.pinned = pinned
+        self.hotkey = hotkey
         self.description = description
     }
 
@@ -32,13 +38,13 @@ struct Prompt: Equatable {
     var title: String { name }
 }
 
-/// A pin collision surfaced at load: two files declared the same ⌥-number. Resolution is
+/// A hotkey collision surfaced at load: two files declared the same ⌥-number. Resolution is
 /// deterministic (lowest filename wins) and NON-destructive — the loser's file is left untouched;
 /// the Library window surfaces the conflict. Pure + Equatable so it is Tier-A testable.
-struct PinConflict: Equatable {
+struct HotkeyConflict: Equatable {
     let slot: Int
     let winner: String   // filename that keeps the slot
-    let loser: String    // filename demoted to unpinned for assignment
+    let loser: String    // filename demoted to no-hotkey for assignment
 }
 
 /// Per-prompt usage for frecency ranking (Stage 6): how often and how recently it was used.
@@ -50,6 +56,9 @@ struct PromptUsage: Codable, Equatable {
 final class PromptStore {
     static let promptsDir = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Prompts")
 
+    /// Defaults to the real `~/Prompts`; overridable so tests can point at a temp directory
+    /// instead of ever touching the user's real library.
+    let promptsDir: URL
     private(set) var prompts: [Prompt] = []
     private var usage: [String: PromptUsage] = [:]
     private var eventStream: FSEventStreamRef?
@@ -62,23 +71,27 @@ final class PromptStore {
     /// no subscriber in Stage 8.
     var onReload: (() -> Void)?
 
+    init(promptsDir: URL = PromptStore.promptsDir) {
+        self.promptsDir = promptsDir
+    }
+
     func load() {
         // Create ~/Prompts if needed
-        try? FileManager.default.createDirectory(at: Self.promptsDir, withIntermediateDirectories: true)
+        try? FileManager.default.createDirectory(at: promptsDir, withIntermediateDirectories: true)
 
         // Seed on first launch. Counts the whole tree (not just the top level), so a library
         // that lives entirely in subfolders is not mistaken for empty and re-seeded.
-        var urls = Self.markdownURLs()
+        var urls = markdownURLs()
         if urls.isEmpty {
             seedPrompts()
-            urls = Self.markdownURLs()
+            urls = markdownURLs()
         }
 
         // Load all .md files (recursive). `filename` is the path relative to ~/Prompts, so a
         // subfolder prompt is keyed "Engineering/foo.md" and a root prompt stays "foo.md".
         var loaded: [Prompt] = []
         for url in urls {
-            let rel = Self.relativePath(of: url)
+            let rel = relativePath(of: url)
             if let content = try? String(contentsOf: url, encoding: .utf8),
                let prompt = Self.parse(content, filename: rel) {
                 if loaded.contains(where: { $0.name == prompt.name }) {
@@ -104,7 +117,7 @@ final class PromptStore {
 
     /// Every `.md` under ~/Prompts (recursive), in a stable path order so load order is
     /// deterministic (frecency cold-start and dedup both lean on it).
-    private static func markdownURLs() -> [URL] {
+    private func markdownURLs() -> [URL] {
         let en = FileManager.default.enumerator(
             at: promptsDir,
             includingPropertiesForKeys: [.isRegularFileKey],
@@ -117,11 +130,23 @@ final class PromptStore {
     }
 
     /// Path of `url` relative to ~/Prompts (e.g. "Engineering/foo.md").
-    static func relativePath(of url: URL) -> String {
-        let base = promptsDir.path
+    func relativePath(of url: URL) -> String {
+        // `url` comes from FileManager's enumerator, which returns the fully resolved path
+        // (e.g. /var -> /private/var under macOS's top-level symlinks). `URL.resolvingSymlinksInPath()`
+        // does NOT resolve /var//tmp/etc (Foundation special-cases them as already-canonical), so
+        // comparing promptsDir.path directly against it silently fails the prefix check below and
+        // every file falls back to its bare last path component, losing its folder entirely. Only
+        // realpath(3) gives the same canonical form the enumerator uses.
+        let base = Self.realPath(of: promptsDir)
         let prefix = base.hasSuffix("/") ? base : base + "/"
         let full = url.path
         return full.hasPrefix(prefix) ? String(full.dropFirst(prefix.count)) : url.lastPathComponent
+    }
+
+    private static func realPath(of url: URL) -> String {
+        var buf = [Int8](repeating: 0, count: Int(PATH_MAX))
+        guard realpath(url.path, &buf) != nil else { return url.path }
+        return String(cString: buf)
     }
 
     /// Folder = the parent directory of a relative path ("" for root, else "Engineering").
@@ -132,16 +157,7 @@ final class PromptStore {
 
     func filter(_ query: String) -> [Prompt] {
         if query.isEmpty { return ranked() }
-        let q = query.lowercased()
-        return prompts
-            .compactMap { p -> (Prompt, Int)? in
-                let score = fuzzyScore(q, in: p.name.lowercased())
-                    ?? fuzzyScore(q, in: p.keywords.joined(separator: " ").lowercased())
-                guard let s = score else { return nil }
-                return (p, s)
-            }
-            .sorted { $0.1 > $1.1 }
-            .map { $0.0 }
+        return Self.fuzzyFilter(query, in: prompts)
     }
 
     func recordUse(of prompt: Prompt) {
@@ -157,6 +173,14 @@ final class PromptStore {
     func ranked(now: Date = Date()) -> [Prompt] {
         Self.rank(prompts, usage: usage, now: now)
     }
+
+    /// A single prompt's usage (count/lastUsed), for the Library window's (Stage 9) usage line.
+    /// `nil` when never used.
+    func usage(for filename: String) -> PromptUsage? { usage[filename] }
+
+    /// Snapshot of all usage data, for `LibraryScope.filter` (Stage 9) to rank `.recent` by
+    /// frecency without duplicating PromptStore's internal frecency-store access.
+    var allUsage: [String: PromptUsage] { usage }
 
     private func persistUsage() {
         if let data = try? JSONEncoder().encode(usage) { defaults?.set(data, forKey: "usage") }
@@ -192,38 +216,94 @@ final class PromptStore {
     // MARK: - Mutation
 
     func save(name: String, keywords: [String], body: String,
-              folder: String = "", pinnedSlot: Int? = nil, description: String? = nil,
+              folder: String = "", pinned: Bool = false, hotkey: Int? = nil, description: String? = nil,
               filename: String) {
         let fname = filename.isEmpty ? newSlug(for: name, in: folder) : filename
-        let url = Self.promptsDir.appendingPathComponent(fname)
+        let url = promptsDir.appendingPathComponent(fname)
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? Self.serialize(name: name, keywords: keywords, body: body,
-                            pin: pinnedSlot, description: description)
+                            pinned: pinned, hotkey: hotkey, description: description)
             .write(to: url, atomically: true, encoding: .utf8)
         suppressReloadUntil = Date().addingTimeInterval(0.3)
         load()
     }
 
     /// The on-disk markdown shape (frontmatter + body). Pure + static so the Tier A test can
-    /// assert serialize→parse symmetry without touching ~/Prompts. `pin`/`description` are emitted
-    /// only when present, so an unpinned/undescribed file stays byte-clean (no spurious keys).
+    /// assert serialize→parse symmetry without touching ~/Prompts. `pinned`/`hotkey`/`description`
+    /// are emitted only when present, so an unpinned/no-hotkey/undescribed file stays byte-clean
+    /// (no spurious keys). `pinned` and `hotkey` are independent — either, both, or neither.
     static func serialize(name: String, keywords: [String], body: String,
-                          pin: Int? = nil, description: String? = nil) -> String {
+                          pinned: Bool = false, hotkey: Int? = nil, description: String? = nil) -> String {
         let kw = keywords.joined(separator: ", ")
         var fm = "---\nname: \(name)\nkeywords: [\(kw)]"
-        if let pin = pin { fm += "\npin: \(pin)" }
+        if pinned { fm += "\npinned: true" }
+        if let hotkey = hotkey { fm += "\nhotkey: \(hotkey)" }
         if let description = description, !description.isEmpty { fm += "\ndescription: \(description)" }
         fm += "\n---\n\n\(body)"
         return fm
     }
 
+    /// `~/Prompts/.trash` — dot-prefixed so `markdownURLs()`'s `.skipsHiddenFiles` already keeps
+    /// it out of the library/HUD with no extra filtering.
+    private var trashDir: URL { promptsDir.appendingPathComponent(".trash") }
+
+    /// Soft delete: moves the file into `trashDir` instead of erasing it, so a mistaken delete is
+    /// recoverable (manually, from Finder — there is no restore UI yet). The Library UI looks
+    /// identical to a hard delete either way, since the file just leaves `prompts` either way.
     func delete(_ prompt: Prompt) {
-        let url = Self.promptsDir.appendingPathComponent(prompt.filename)
-        try? FileManager.default.removeItem(at: url)
+        let url = promptsDir.appendingPathComponent(prompt.filename)
+        try? FileManager.default.createDirectory(at: trashDir, withIntermediateDirectories: true)
+        let destURL = trashDir.appendingPathComponent(uniqueTrashName(for: prompt.filename))
+        try? FileManager.default.moveItem(at: url, to: destURL)
         usage.removeValue(forKey: prompt.filename)
         persistUsage()
         load()
+    }
+
+    /// Flattens a (possibly folder-prefixed) relative filename to a trash-safe leaf name, then
+    /// applies the same numeric-suffix collision avoidance as `newSlug` — trash is a single flat
+    /// directory, so two prompts from different folders (or two deletes over time) can share a
+    /// leaf name even though they never collided in the live tree.
+    private func uniqueTrashName(for relativePath: String) -> String {
+        let leaf = (relativePath as NSString).lastPathComponent
+        let base = (leaf as NSString).deletingPathExtension
+        let ext = (leaf as NSString).pathExtension
+        let existing = (try? FileManager.default.contentsOfDirectory(atPath: trashDir.path)) ?? []
+        var candidate = leaf
+        var n = 2
+        while existing.contains(candidate) {
+            candidate = "\(base)-\(n).\(ext)"
+            n += 1
+        }
+        return candidate
+    }
+
+    /// Moves a prompt's file into `folder` (Stage 9) and migrates its frecency usage key —
+    /// without this, a reorganize would silently reset `used N×` history, since `filename` is
+    /// the usage-dict key (see the doc comment on `Prompt.filename`).
+    func move(_ prompt: Prompt, toFolder folder: String) {
+        let newFilename = newSlug(for: baseName(of: prompt.filename), in: folder)
+        let oldURL = promptsDir.appendingPathComponent(prompt.filename)
+        let newURL = promptsDir.appendingPathComponent(newFilename)
+        try? FileManager.default.createDirectory(
+            at: newURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.moveItem(at: oldURL, to: newURL)
+        if let u = usage[prompt.filename] {
+            usage[newFilename] = u
+            usage.removeValue(forKey: prompt.filename)
+            persistUsage()
+        }
+        suppressReloadUntil = Date().addingTimeInterval(0.3)
+        load()
+    }
+
+    /// The leaf filename (no directory, no extension) `newSlug` expects as its `name` input —
+    /// reuses the existing slug minting so a move gets the same folder-scoped collision safety
+    /// as a fresh save.
+    private func baseName(of relativePath: String) -> String {
+        let leaf = (relativePath as NSString).lastPathComponent
+        return (leaf as NSString).deletingPathExtension
     }
 
     /// Watch the whole ~/Prompts tree (subfolders included) via FSEvents. The single-fd
@@ -240,7 +320,7 @@ final class PromptStore {
         }
         guard let stream = FSEventStreamCreate(
             kCFAllocatorDefault, callback, &context,
-            [Self.promptsDir.path] as CFArray,
+            [promptsDir.path] as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.2,  // latency seconds — coalesce a burst (e.g. a multi-file move) into one reload
             UInt32(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer)) else { return }
@@ -271,7 +351,7 @@ final class PromptStore {
             .components(separatedBy: .whitespaces).joined(separator: "-")
         base = String(base.filter { $0.isLetter || $0.isNumber || $0 == "-" })
         if base.isEmpty { base = "prompt" }
-        let dir = folder.isEmpty ? Self.promptsDir : Self.promptsDir.appendingPathComponent(folder)
+        let dir = folder.isEmpty ? promptsDir : promptsDir.appendingPathComponent(folder)
         let existing = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         var candidate = base
         var n = 2
@@ -302,7 +382,11 @@ final class PromptStore {
 
         var name: String?
         var keywords: [String] = []
-        var pin: Int?
+        var pinned = false
+        var hotkey: Int?
+        var legacyPin: Int?
+        var sawPinnedKey = false
+        var sawHotkeyKey = false
         var description: String?
         for line in frontmatterLines {
             if line.hasPrefix("name:") {
@@ -311,51 +395,83 @@ final class PromptStore {
                 let raw = line.dropFirst(9).trimmingCharacters(in: .whitespaces)
                 let stripped = raw.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
                 keywords = stripped.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            } else if line.hasPrefix("pinned:") {
+                let raw = line.dropFirst(7).trimmingCharacters(in: .whitespaces)
+                pinned = (raw == "true")
+                sawPinnedKey = true
+            } else if line.hasPrefix("hotkey:") {
+                let raw = line.dropFirst(7).trimmingCharacters(in: .whitespaces)
+                // Valid hotkey is 1…9. Out-of-range/garbage → no hotkey.
+                if let v = Int(raw), hotkeySlots.contains(v) { hotkey = v }
+                sawHotkeyKey = true
             } else if line.hasPrefix("pin:") {
+                // Legacy (pre-revamp) frontmatter: `pin: N` meant both pinned AND hotkey N.
+                // Migrated on read only — files are rewritten in the new two-key shape only when
+                // next saved through the editor.
                 let raw = line.dropFirst(4).trimmingCharacters(in: .whitespaces)
-                // Valid pin is 1…9 (mirrors HudRow.slotCount). Out-of-range/garbage → unpinned.
-                if let v = Int(raw), pinSlots.contains(v) { pin = v }
+                if let v = Int(raw), hotkeySlots.contains(v) { legacyPin = v }
             } else if line.hasPrefix("description:") {
                 let raw = line.dropFirst(12).trimmingCharacters(in: .whitespaces)
                 if !raw.isEmpty { description = raw }
             }
+        }
+        if let legacy = legacyPin {
+            if !sawHotkeyKey { hotkey = legacy }
+            if !sawPinnedKey { pinned = true }
         }
         guard let n = name, !n.isEmpty else {
             print("[PromptStore] WARNING: missing 'name:' in \(filename) — skipping")
             return nil
         }
         return Prompt(name: n, keywords: keywords, body: body, filename: filename,
-                      folder: folder(forRelativePath: filename), pinnedSlot: pin, description: description)
+                      folder: folder(forRelativePath: filename), pinned: pinned, hotkey: hotkey,
+                      description: description)
     }
 
-    /// Valid ⌥-pin numbers. Mirrors `HudRow.slotCount` (9); kept here so PromptStore stays free of
-    /// a HudRow dependency (its Tier-A test compiles PromptStore alone).
-    static let pinSlots = 1...9
+    /// Valid ⌥-hotkey numbers (1...9).
+    static let hotkeySlots = 1...9
 
-    // MARK: - Pinning (pure, testable — Stage 8)
+    // MARK: - Hotkey resolution (pure, testable)
 
-    /// Resolve declared pins into a slot→prompt map. Deterministic: the lowest filename wins a
-    /// contested slot; the loser is reported as a `PinConflict` and treated as unpinned for
-    /// assignment, with its file left UNTOUCHED (no silent rewrite at load). Pure so the Tier A
-    /// test needs no filesystem.
-    static func resolvePins(_ prompts: [Prompt]) -> (pins: [Int: Prompt], conflicts: [PinConflict]) {
-        var pins: [Int: Prompt] = [:]
-        var conflicts: [PinConflict] = []
+    /// Resolve declared hotkeys into a slot→prompt map. Deterministic: the lowest filename wins
+    /// a contested slot; the loser is reported as a `HotkeyConflict` and treated as no-hotkey
+    /// for assignment, with its file left UNTOUCHED (no silent rewrite at load). Pure so the
+    /// Tier A test needs no filesystem. Independent of `pinned` — a hotkey conflict has nothing
+    /// to do with which prompts are pinned.
+    static func resolveHotkeys(_ prompts: [Prompt]) -> (hotkeys: [Int: Prompt], conflicts: [HotkeyConflict]) {
+        var hotkeys: [Int: Prompt] = [:]
+        var conflicts: [HotkeyConflict] = []
         for p in prompts.sorted(by: { $0.filename < $1.filename }) {
-            guard let slot = p.pinnedSlot else { continue }
-            if let winner = pins[slot] {
-                conflicts.append(PinConflict(slot: slot, winner: winner.filename, loser: p.filename))
+            guard let slot = p.hotkey else { continue }
+            if let winner = hotkeys[slot] {
+                conflicts.append(HotkeyConflict(slot: slot, winner: winner.filename, loser: p.filename))
             } else {
-                pins[slot] = p
+                hotkeys[slot] = p
             }
         }
-        return (pins, conflicts)
+        return (hotkeys, conflicts)
     }
 
-    /// The current pinned slot→prompt map (conflict winners only).
-    func pinnedAssignment() -> [Int: Prompt] { Self.resolvePins(prompts).pins }
+    /// The current hotkey slot→prompt map (conflict winners only).
+    func hotkeyAssignment() -> [Int: Prompt] { Self.resolveHotkeys(prompts).hotkeys }
 
-    private func fuzzyScore(_ query: String, in text: String) -> Int? {
+    /// Fuzzy-match + rank `prompts` against `query` (assumed non-empty). Pure and static so
+    /// `LibraryScope.filter` (Stage 9) can reuse the exact same matching the palette uses,
+    /// scoped to an arbitrary subset, without a `PromptStore` instance.
+    static func fuzzyFilter(_ query: String, in prompts: [Prompt]) -> [Prompt] {
+        let q = query.lowercased()
+        return prompts
+            .compactMap { p -> (Prompt, Int)? in
+                let score = fuzzyScore(q, in: p.name.lowercased())
+                    ?? fuzzyScore(q, in: p.keywords.joined(separator: " ").lowercased())
+                guard let s = score else { return nil }
+                return (p, s)
+            }
+            .sorted { $0.1 > $1.1 }
+            .map { $0.0 }
+    }
+
+    private static func fuzzyScore(_ query: String, in text: String) -> Int? {
         var qi = query.startIndex
         var score = 0
         var lastMatchIdx = text.startIndex
@@ -379,7 +495,7 @@ final class PromptStore {
         let seeds = (try? FileManager.default.contentsOfDirectory(at: bundleURL,
             includingPropertiesForKeys: nil)) ?? []
         for seed in seeds.filter({ $0.pathExtension == "md" }) {
-            let dest = Self.promptsDir.appendingPathComponent(seed.lastPathComponent)
+            let dest = promptsDir.appendingPathComponent(seed.lastPathComponent)
             try? FileManager.default.copyItem(at: seed, to: dest)
         }
     }

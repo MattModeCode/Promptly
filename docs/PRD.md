@@ -65,7 +65,15 @@ imaginary general user now would add weight that fights the feeling.
 
 ## 7. Non-goals (explicit)
 
-- **No settings panel / preferences window.** (Menu-bar dropdown holds the few real controls only.)
+- **No *tuning* of the system's judgment.** Frecency and adaptive ordering stay non-configurable —
+  there is no slider to weight ranking, no preferences pane for the half-second's behavior
+  (the plumbing — Accessibility status, hotkey rebind — stays inspectable via the menu-bar dropdown;
+  see §6 Principle 2). *Amended:* the **Library window** ([STAGE-9](stages/STAGE-9-library-window.md)) —
+  a focus-taking management surface for browsing, searching, creating, editing, organizing, and pinning —
+  is now in scope. It is safe precisely because it **never pastes into another app**: entirely off the
+  paste loop, it can't threaten the half-second or the never-steal-focus guarantee this non-goal was
+  written to protect. Only the "no window at all" half of the old non-goal is relaxed; the system's
+  judgment is still never user-tuned.
 - **No cloud, no account, no sync** in the foreseeable scope. (A visible local prompt folder is the "sync.")
 - **No cross-platform.** macOS only; native is required, not preferred — Electron/Tauri can't hit
   the never-steal-focus + paste-into-any-app bar.
@@ -75,7 +83,7 @@ imaginary general user now would add weight that fights the feeling.
 
 ## 8. Staged roadmap (at a glance)
 
-Specified at **tiered depth**: the spike + MVP deeply (see FEATURES/DESIGN/TASKS); stages 3–8 as
+Specified at **tiered depth**: the spike + MVP deeply (see FEATURES/DESIGN/TASKS); stages 3–10 as
 intent + rough acceptance criteria + open questions, to be pulled by real friction, not pre-built.
 
 | # | Stage | One-line intent | Stage file |
@@ -88,6 +96,9 @@ intent + rough acceptance criteria + open questions, to be pulled by real fricti
 | 5 | **Inverse capture** | Select text anywhere → hotkey → minimal "save as prompt" sheet, pre-filled. | [STAGE-5](stages/STAGE-5-inverse-capture.md) |
 | 6 | **Frecency + search** | Usage-ranked ordering; FTS only once the library is large. | [STAGE-6](stages/STAGE-6-frecency-search.md) |
 | 7 | **Adaptive ⌥1–9 row** | A heads-up display, not a menu: fixed positions, content reorders by app/time. | [STAGE-7](stages/STAGE-7-adaptive-hud-row.md) |
+| 8 | **Manual pinning + folders** | Pin prompts to ⌥1–9 explicitly (hybrid with Stage 7's adaptive fill); folders as real subdirectories. | [STAGE-8](stages/STAGE-8-pinning.md) |
+| 9 | **Library window** | A three-pane management window (sidebar/list/detail) — off the paste path, so it's allowed to take focus. | [STAGE-9](stages/STAGE-9-library-window.md) |
+| 10 | **Library polish** | Drag-to-move, folder rename, pin-conflict warnings, relative-time usage display. | [STAGE-10](stages/STAGE-10-library-polish.md) |
 
 Each stage's exit criterion authorizes the next; see [TASKS.md](TASKS.md). The full feature
 universe (incl. candidates + non-goals) is indexed in [FEATURE-CATALOG.md](FEATURE-CATALOG.md);

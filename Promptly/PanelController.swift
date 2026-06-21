@@ -1,33 +1,21 @@
 import AppKit
 
-// MARK: - Mattmode Mono palette
-
-private enum Palette {
-    static let panelBG     = NSColor(red: 0x0f/255, green: 0x0f/255, blue: 0x14/255, alpha: 1)
-    static let primary     = NSColor(red: 0xe2/255, green: 0xe8/255, blue: 0xf0/255, alpha: 1)
-    static let secondary   = NSColor(red: 0x94/255, green: 0xa3/255, blue: 0xb8/255, alpha: 1)
-    static let footer      = NSColor(red: 0x64/255, green: 0x74/255, blue: 0x8b/255, alpha: 1)
-    static let matched     = NSColor.white
-    static let selFill     = NSColor(white: 0.9, alpha: 0.10)
-    static let selBar      = NSColor(white: 0.9, alpha: 0.55)
-    static let separator   = NSColor(white: 1.0, alpha: 0.15)
-
-    static func mono(_ size: CGFloat) -> NSFont {
-        NSFont(name: "JetBrainsMono-Regular", size: size)
-            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-    }
-    static func monoMedium(_ size: CGFloat) -> NSFont {
-        NSFont(name: "JetBrainsMono-Medium", size: size)
-            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .medium)
-    }
-}
-
 private let kRowHeight: CGFloat = 38
 private let kFilterHeight: CGFloat = 44
 private let kFooterHeight: CGFloat = 28
 private let kSeparatorHeight: CGFloat = 1
 private let kMaxRows = 6
 private let kPanelWidth: CGFloat = 560
+
+// MARK: - Pinned-card strip layout
+
+private let kPinnedLabelHeight: CGFloat = 18
+private let kPinnedCardHeight: CGFloat = 52
+private let kPinnedCardWidth: CGFloat = 150
+private let kPinnedCardGap: CGFloat = 10
+private let kPinnedSectionPadding: CGFloat = 16   // matches filterField's leading/trailing inset
+private let kPinnedSectionTopGap: CGFloat = 12
+private let kPinnedSectionBottomGap: CGFloat = 8
 
 // MARK: - Key-capable panel
 
@@ -114,6 +102,72 @@ final class PromptRowView: NSTableRowView {
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 }
 
+// MARK: - Pinned card (hotkey badge + title; a glanceable shortcut strip, not the full list)
+
+/// One card in the pinned strip. Shows the prompt's hotkey badge (blank if it has none — pinned
+/// and hotkey are independent) and title. Participates in the same ↑/↓ traversal as the regular
+/// list, so it carries its own selection highlight mirroring `PromptRowView`'s bar/fill treatment.
+private final class PinnedCardView: NSView {
+    private let hotkeyLabel = NSTextField(labelWithString: "")
+    private let titleLabel = NSTextField(labelWithString: "")
+    var onClick: (() -> Void)?
+
+    var isSelected: Bool = false {
+        didSet {
+            layer?.backgroundColor = isSelected ? Palette.selFill.cgColor : NSColor.clear.cgColor
+            layer?.borderColor = (isSelected ? Palette.selBar : Palette.separator).cgColor
+        }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.borderWidth = 1
+        layer?.borderColor = Palette.separator.cgColor
+
+        hotkeyLabel.translatesAutoresizingMaskIntoConstraints = false
+        hotkeyLabel.font = Palette.mono(11)
+        hotkeyLabel.textColor = Palette.footer
+        hotkeyLabel.backgroundColor = .clear
+        hotkeyLabel.isBordered = false
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = Palette.mono(12)
+        titleLabel.textColor = Palette.primary
+        titleLabel.backgroundColor = .clear
+        titleLabel.isBordered = false
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 2
+        titleLabel.cell?.wraps = true
+        // `labelWithString` defaults to single-line mode, which silently overrides
+        // `maximumNumberOfLines` — found by visual self-verification (the title rendered as one
+        // truncated line instead of wrapping to two).
+        titleLabel.usesSingleLineMode = false
+
+        addSubview(hotkeyLabel)
+        addSubview(titleLabel)
+        NSLayoutConstraint.activate([
+            hotkeyLabel.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            hotkeyLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            hotkeyLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+
+            titleLabel.topAnchor.constraint(equalTo: hotkeyLabel.bottomAnchor, constant: 2),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
+            titleLabel.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -6),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(title: String, hotkey: Int?) {
+        hotkeyLabel.stringValue = hotkey.map { "⌥\($0)" } ?? ""
+        titleLabel.stringValue = title
+    }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
 // MARK: - Row cell (name + matched-char highlighting)
 
 private final class PromptCellView: NSTableCellView {
@@ -151,6 +205,10 @@ private final class PromptCellView: NSTableCellView {
 
     func configure(name: String, query: String, slot: Int?) {
         slotLabel.stringValue = slot.map { "⌥\($0)" } ?? ""
+        // One consistent chip style — a hotkey is purely explicit now, no frecency-filled
+        // chip to distinguish it from.
+        slotLabel.font = Palette.mono(11)
+        slotLabel.textColor = Palette.footer
         if query.isEmpty {
             label.attributedStringValue = NSAttributedString(
                 string: name,
@@ -192,14 +250,24 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     var onEdit: ((Prompt) -> Void)?
     private(set) var lastCaptured: CapturedApp?
 
+    /// `selectedIndex` ranges over the COMBINED sequence: pinned cards first, then the regular
+    /// list — one continuous ↑/↓ traversal, per the confirmed design. A pinned+hotkeyed prompt
+    /// can legitimately appear twice (once as a card, once in its normal list position).
     var selectedPrompt: Prompt? {
-        guard !results.isEmpty, selectedIndex < results.count else { return nil }
-        return results[selectedIndex]
+        let total = pinnedResults.count + results.count
+        guard total > 0, selectedIndex < total else { return nil }
+        return selectedIndex < pinnedResults.count
+            ? pinnedResults[selectedIndex]
+            : results[selectedIndex - pinnedResults.count]
     }
 
     private var panel: NSPanel!
     private var filterField: FilterField!
     private var separator: NSBox!
+    private var pinnedContainer: NSView!
+    private var pinnedLabel: NSTextField!
+    private var pinnedContainerHeightConstraint: NSLayoutConstraint!
+    private var pinnedCardViews: [PinnedCardView] = []
     private var scrollView: NSScrollView!
     private var scrollHeightConstraint: NSLayoutConstraint!
     private var tableView: NSTableView!
@@ -207,9 +275,18 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var footerLabel: NSTextField!
 
     private var results: [Prompt] = []
+    /// Pinned prompts matching the current filter — a glanceable strip on top of the full
+    /// searchable list below. Recomputed live every keystroke (unlike `hudAssignment`, which
+    /// stays frozen for the appearance); pinned status is purely organizational, not part of
+    /// the no-live-reshuffle hotkey-firing contract.
+    private var pinnedResults: [Prompt] = []
     private var selectedIndex = 0
     private var query: String { filterField?.stringValue ?? "" }
     private var committing = false
+    /// Set while `applySelectionHighlighting()` programmatically drives `tableView`'s selection,
+    /// so `tableViewSelectionDidChange` can tell that apart from a real mouse click and not loop
+    /// back into `selectedIndex`.
+    private var syncingTableSelection = false
 
     // Stage 4: in-place {{ask:label}} fill-in. Non-nil only while the panel is in ask mode —
     // the same surface, the field repurposed as the answer box, the panel frame FROZEN.
@@ -221,6 +298,10 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // reshuffle — FEATURES §7). ⌥3 fires the same prompt for the whole appearance, even while
     // the filter changes the visible rows.
     private var hudAssignment: [Int: Prompt] = [:]
+    // Frozen alongside `hudAssignment` (same appearance, same freeze invariant) — filename →
+    // hotkey, for the row chip lookup. Never recomputed live from the store (which could diverge
+    // mid-appearance if hotkeys change on disk via the Library window).
+    private var hudSlotByFilename: [String: Int] = [:]
 
     private static let browseFooter = "↑/↓ move · ↵ paste · ⌫ delete · ⌘E edit · esc dismiss"
     private static let askFooter    = "↵ / ⇥ next · esc cancel"
@@ -283,6 +364,21 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         separator.fillColor = Palette.separator
         content.addSubview(separator)
 
+        // Pinned-card strip — collapses to zero height when there are no pinned matches
+        // (see `rebuildPinnedCards()`). Its own children are laid out with manual frames
+        // (a flow-wrap grid), while the container itself is Auto-Layout-pinned in the stack.
+        pinnedContainer = NSView()
+        pinnedContainer.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(pinnedContainer)
+
+        pinnedLabel = NSTextField(labelWithString: "pinned")
+        pinnedLabel.font = Palette.mono(11)
+        pinnedLabel.textColor = Palette.footer
+        pinnedLabel.backgroundColor = .clear
+        pinnedLabel.isBordered = false
+        pinnedLabel.frame = NSRect(x: kPinnedSectionPadding, y: 0, width: 100, height: kPinnedLabelHeight)
+        pinnedContainer.addSubview(pinnedLabel)
+
         // Table
         tableView = NSTableView()
         tableView.backgroundColor = .clear
@@ -328,9 +424,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         // zero. Updated per state in `applyState()`.
         scrollHeightConstraint = scrollView.heightAnchor.constraint(
             equalToConstant: CGFloat(kMaxRows) * kRowHeight)
+        // Zero by default (no pins yet); `rebuildPinnedCards()` grows it to fit.
+        pinnedContainerHeightConstraint = pinnedContainer.heightAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
             scrollHeightConstraint,
+            pinnedContainerHeightConstraint,
 
             filterField.topAnchor.constraint(equalTo: content.topAnchor),
             filterField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
@@ -342,7 +441,11 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             separator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             separator.heightAnchor.constraint(equalToConstant: kSeparatorHeight),
 
-            scrollView.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            pinnedContainer.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            pinnedContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            pinnedContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+
+            scrollView.topAnchor.constraint(equalTo: pinnedContainer.bottomAnchor),
             scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
 
@@ -352,7 +455,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             footerLabel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             footerLabel.heightAnchor.constraint(equalToConstant: kFooterHeight),
 
-            emptyLabel.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            emptyLabel.topAnchor.constraint(equalTo: pinnedContainer.bottomAnchor),
             emptyLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
             emptyLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
             emptyLabel.bottomAnchor.constraint(equalTo: footerLabel.topAnchor),
@@ -360,6 +463,10 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     // MARK: Present / dismiss
+
+    /// Whether the panel is currently on screen — lets the global hotkey toggle (press again to
+    /// close) instead of unconditionally re-presenting.
+    var isPresented: Bool { panel.isVisible }
 
     func present(captured: CapturedApp) {
         lastCaptured = captured
@@ -369,9 +476,13 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         restoreBrowseChrome()
         filterField.stringValue = ""
         refreshResults()
-        // Freeze the ⌥1–9 assignment for this appearance (Stage 7) — from the same ranked list
-        // the resting (empty-query) rows show, so the chips match the keys.
-        hudAssignment = HudRow.assign(promptStore.ranked())
+        // Freeze the ⌥1–9 assignment for this appearance — a hotkey is purely an explicit
+        // per-prompt attribute now (no frecency autofill), so this is just the resolved
+        // hotkey→prompt map, frozen so a Library-window edit mid-appearance can't retarget
+        // what a number fires until the next open.
+        hudAssignment = promptStore.hotkeyAssignment()
+        hudSlotByFilename = Dictionary(
+            uniqueKeysWithValues: hudAssignment.map { ($0.value.filename, $0.key) })
 
         let screen = captured.screen
         let h = panelHeight()
@@ -410,8 +521,11 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // MARK: Results / state
 
     private func refreshResults() {
-        results = promptStore.filter(query)
+        let filtered = promptStore.filter(query)
+        results = filtered
+        pinnedResults = filtered.filter { $0.pinned }
         selectedIndex = 0
+        rebuildPinnedCards()
         applyState()
     }
 
@@ -428,11 +542,9 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             // State A (recents) or B (filtering)
             emptyLabel.isHidden = true
             scrollView.isHidden = false
+            pinnedContainer.isHidden = false
             tableView.reloadData()
-            if selectedIndex < results.count {
-                tableView.selectRowIndexes(IndexSet(integer: selectedIndex), byExtendingSelection: false)
-                tableView.scrollRowToVisible(selectedIndex)
-            }
+            applySelectionHighlighting()
         }
         scrollHeightConstraint.constant = listHeight()
         resizePanel()
@@ -444,7 +556,80 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         scrollView.isHidden = true
     }
 
-    /// Height of the list/empty-message area between the separator and footer.
+    /// Rebuilds the pinned-card views from `pinnedResults` (flow-wrapped grid, manual frames —
+    /// `pinnedContainer` itself stays Auto-Layout-pinned; only its children are laid out by
+    /// hand) and grows/collapses `pinnedContainerHeightConstraint` to fit, mirroring how
+    /// `scrollHeightConstraint` is driven for the regular list. `pinnedContainer` is a plain
+    /// (non-flipped) `NSView`, so y=0 is its bottom edge and y increases upward.
+    private func rebuildPinnedCards() {
+        pinnedCardViews.forEach { $0.removeFromSuperview() }
+        pinnedCardViews = []
+
+        guard !pinnedResults.isEmpty else {
+            pinnedLabel.isHidden = true
+            pinnedContainerHeightConstraint.constant = 0
+            return
+        }
+        pinnedLabel.isHidden = false
+
+        let availableWidth = kPanelWidth - 2 * kPinnedSectionPadding
+        let perRow = max(1, Int((availableWidth + kPinnedCardGap) / (kPinnedCardWidth + kPinnedCardGap)))
+        let rows = (pinnedResults.count + perRow - 1) / perRow
+        let containerHeight = pinnedContainerHeightFor(rows: rows)
+        pinnedContainerHeightConstraint.constant = containerHeight
+
+        // Top-down: the label sits just below the separator; row 0 of cards sits flush under
+        // the label; later rows stack downward toward the container's bottom edge.
+        let labelTop = containerHeight - kPinnedSectionTopGap
+        pinnedLabel.frame.origin.y = labelTop - kPinnedLabelHeight
+        let cardsTop = labelTop - kPinnedLabelHeight
+
+        for (i, prompt) in pinnedResults.enumerated() {
+            let row = i / perRow
+            let col = i % perRow
+            let x = kPinnedSectionPadding + CGFloat(col) * (kPinnedCardWidth + kPinnedCardGap)
+            let y = cardsTop - CGFloat(row + 1) * kPinnedCardHeight - CGFloat(row) * kPinnedCardGap
+            let card = PinnedCardView(frame: NSRect(x: x, y: y, width: kPinnedCardWidth, height: kPinnedCardHeight))
+            card.configure(title: prompt.name, hotkey: hudSlotByFilename[prompt.filename])
+            let index = i
+            card.onClick = { [weak self] in self?.selectCard(at: index) }
+            pinnedContainer.addSubview(card)
+            pinnedCardViews.append(card)
+        }
+    }
+
+    private func pinnedContainerHeightFor(rows: Int) -> CGFloat {
+        guard rows > 0 else { return 0 }
+        return kPinnedSectionTopGap + kPinnedLabelHeight
+            + CGFloat(rows) * kPinnedCardHeight + CGFloat(rows - 1) * kPinnedCardGap
+            + kPinnedSectionBottomGap
+    }
+
+    private func selectCard(at index: Int) {
+        guard !committing else { return }
+        selectedIndex = index
+        applySelectionHighlighting()
+    }
+
+    /// Applies the combined-index selection to whichever surface it falls in — a pinned card
+    /// or a regular row — and clears highlighting on the other. Safe to call with either array
+    /// empty (no-ops).
+    private func applySelectionHighlighting() {
+        syncingTableSelection = true
+        defer { syncingTableSelection = false }
+        if selectedIndex < pinnedResults.count {
+            tableView.deselectAll(nil)
+            for (i, card) in pinnedCardViews.enumerated() { card.isSelected = (i == selectedIndex) }
+        } else {
+            for card in pinnedCardViews { card.isSelected = false }
+            let row = selectedIndex - pinnedResults.count
+            guard row < results.count else { return }
+            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            tableView.scrollRowToVisible(row)
+        }
+    }
+
+    /// Height of the list/empty-message area between the pinned strip and footer.
     private func listHeight() -> CGFloat {
         if promptStore.prompts.isEmpty || results.isEmpty {
             return kRowHeight   // one line for the empty/no-match message
@@ -453,7 +638,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func panelHeight() -> CGFloat {
-        kFilterHeight + kSeparatorHeight + listHeight() + kFooterHeight
+        kFilterHeight + kSeparatorHeight + pinnedContainerHeightConstraint.constant + listHeight() + kFooterHeight
     }
 
     private func resizePanel() {
@@ -483,20 +668,20 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func moveSelection(_ delta: Int) {
-        guard !results.isEmpty else { return }
-        selectedIndex = max(0, min(results.count - 1, selectedIndex + delta))
-        tableView.selectRowIndexes(IndexSet(integer: selectedIndex), byExtendingSelection: false)
-        tableView.scrollRowToVisible(selectedIndex)
+        let total = pinnedResults.count + results.count
+        guard total > 0 else { return }
+        selectedIndex = max(0, min(total - 1, selectedIndex + delta))
+        applySelectionHighlighting()
     }
 
     private func commitSelected() {
         guard !committing else { return }
-        guard !results.isEmpty, selectedIndex < results.count else {
+        guard let prompt = selectedPrompt else {
             // State C: ↵ dismisses
             dismiss()
             return
         }
-        commit(results[selectedIndex])
+        commit(prompt)
     }
 
     /// ⌥N — fire the prompt frozen at HUD slot N (Stage 7). Honors the freeze: works against the
@@ -529,10 +714,11 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func enterAskMode(prompt: Prompt, flow: AskFlow) {
         askPrompt = prompt
         askFlow = flow
-        // Repurpose the SAME surface: hide the list, keep the panel exactly where/what size it
-        // is (do NOT call resizePanel — spatial trust, FEATURES §7), turn the field into the
-        // answer box, and use the vacated list space for a quiet progress line.
+        // Repurpose the SAME surface: hide the list AND the pinned strip, keep the panel
+        // exactly where/what size it is (do NOT call resizePanel — spatial trust, FEATURES §7),
+        // turn the field into the answer box, and use the vacated space for a quiet progress line.
         scrollView.isHidden = true
+        pinnedContainer.isHidden = true
         emptyLabel.isHidden = false
         filterField.stringValue = ""
         updateAskChrome()
@@ -592,8 +778,13 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return
         }
         // ~80ms pulse on the selected row (re-draw at full selection), then ~120ms fade.
-        if selectedIndex < results.count {
-            tableView.rowView(atRow: selectedIndex, makeIfNecessary: false)?.needsDisplay = true
+        // (Pinned cards are already layer-backed and redraw instantly on `isSelected`, so only
+        // the table-row case needs an explicit redraw nudge here.)
+        if selectedIndex >= pinnedResults.count {
+            let row = selectedIndex - pinnedResults.count
+            if row < results.count {
+                tableView.rowView(atRow: row, makeIfNecessary: false)?.needsDisplay = true
+            }
         }
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.08
@@ -666,14 +857,27 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return c
         }()
         let prompt = results[row]
-        // Chips only in the resting (empty-query) state, where the visible rows are the ranked
-        // list and so line up with the frozen ⌥1–9 assignment.
-        let slot: Int? = (query.isEmpty && row < HudRow.slotCount) ? row + 1 : nil
+        // The chip shows whenever this exact prompt has an explicit hotkey — from the FROZEN
+        // hudAssignment, not live, so it can't retarget mid-appearance; independent of the
+        // current filter text (a hotkey is a fixed fact about the prompt, not a ranking guess).
+        let slot = hudSlotByFilename[prompt.filename]
         cell.configure(name: prompt.name, query: query, slot: slot)
         return cell
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { true }
+
+    /// A real mouse click on a row only changes the table's own selection model — without this,
+    /// `selectedIndex` (the arrow-key state Enter actually fires) stays stale, so a click visibly
+    /// highlights one row while ↵ commits another. Mirrors `selectCard(at:)`'s sync for pinned
+    /// cards, which already routes clicks through `selectedIndex`.
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !syncingTableSelection, !committing else { return }
+        let row = tableView.selectedRow
+        guard row >= 0, row < results.count else { return }
+        for card in pinnedCardViews { card.isSelected = false }
+        selectedIndex = pinnedResults.count + row
+    }
 }
 
 // MARK: - NSTextFieldDelegate conformance

@@ -22,10 +22,13 @@ arch -x86_64 swiftc \
     "$PROJECT_ROOT/Promptly/HotkeyManager.swift" \
     "$PROJECT_ROOT/Promptly/PromptStore.swift" \
     "$PROJECT_ROOT/Promptly/TokenEngine.swift" \
-    "$PROJECT_ROOT/Promptly/HudRow.swift" \
     "$PROJECT_ROOT/Promptly/PasteService.swift" \
-    "$PROJECT_ROOT/Promptly/PromptEditorPanel.swift" \
+    "$PROJECT_ROOT/Promptly/Palette.swift" \
+    "$PROJECT_ROOT/Promptly/ThemedControls.swift" \
+    "$PROJECT_ROOT/Promptly/LibraryScope.swift" \
+    "$PROJECT_ROOT/Promptly/RelativeTime.swift" \
     "$PROJECT_ROOT/Promptly/PanelController.swift" \
+    "$PROJECT_ROOT/Promptly/LibraryWindowController.swift" \
     "$PROJECT_ROOT/Promptly/main.swift" \
     -Xlinker -sectcreate \
     -Xlinker __TEXT \
@@ -44,6 +47,7 @@ for f in JetBrainsMono-Regular.ttf JetBrainsMono-Medium.ttf; do
     fi
 done
 cp "$PROJECT_ROOT/Promptly/Resources/SeedPrompts/"*.md "$BUILD_DIR/Promptly.app/Contents/Resources/SeedPrompts/" 2>/dev/null || true
+cp "$PROJECT_ROOT/Promptly/Resources/AppIcon.icns" "$BUILD_DIR/Promptly.app/Contents/Resources/"
 
 # Ad-hoc sign (stable for TCC — never use a Developer ID cert here; see CLAUDE.md)
 codesign --sign - --force --deep "$BUILD_DIR/Promptly.app"
