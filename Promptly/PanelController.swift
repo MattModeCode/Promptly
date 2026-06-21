@@ -163,7 +163,7 @@ private final class PinnedCardView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(title: String, hotkey: Int?) {
-        hotkeyLabel.stringValue = hotkey.map { "⌥\($0)" } ?? ""
+        hotkeyLabel.stringValue = hotkey.map { "⌘\($0)" } ?? ""
         titleLabel.stringValue = title
     }
 
@@ -206,7 +206,7 @@ private final class PromptCellView: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 
     func configure(name: String, query: String, slot: Int?) {
-        slotLabel.stringValue = slot.map { "⌥\($0)" } ?? ""
+        slotLabel.stringValue = slot.map { "⌘\($0)" } ?? ""
         // One consistent chip style — a hotkey is purely explicit now, no frecency-filled
         // chip to distinguish it from.
         slotLabel.font = Palette.mono(11)
