@@ -65,18 +65,20 @@ final class FilterField: NSTextField {
     }
 
     var onEdit: (() -> Void)?
-    /// ⌥1–9 — fire the prompt frozen at that HUD slot (Stage 7). Intercepted here, before the
-    /// field editor would insert the option-modified character.
+    /// ⌘1–9 — fire the prompt frozen at that HUD slot (Stage 7). Intercepted here, before the
+    /// field editor would insert the character. (Was ⌥1–9; Option+digit collides with macOS's
+    /// reserved special-character combo, so this moved to Command+digit.)
     var onHudSelect: ((Int) -> Void)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.shift), !event.modifierFlags.contains(.option),
            event.charactersIgnoringModifiers?.lowercased() == "e" {
             onEdit?()
             return true
         }
-        if event.modifierFlags.contains(.option),
-           !event.modifierFlags.contains(.command),
+        if event.modifierFlags.contains(.command),
+           !event.modifierFlags.contains(.shift), !event.modifierFlags.contains(.option),
            let chars = event.charactersIgnoringModifiers, chars.count == 1,
            let digit = Int(chars), (1...9).contains(digit) {
             onHudSelect?(digit)
