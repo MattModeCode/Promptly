@@ -1,0 +1,18 @@
+# Build artifacts
+.DS_Store
+**/.DS_Store
+*.swiftmodule
+.build/
+DerivedData/
+dist/
+
+# Local worktrees / tooling scratch
+.worktrees/
+.superpowers/
+
+# Internal/dev material — kept locally, excluded from the public repo
+.claude/
+Random/
+docs/superpowers/
+docs/stages/
+docs/AGENT-WORKFLOW.md

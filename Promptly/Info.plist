@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.promptly.app</string>
+	<key>CFBundleName</key>
+	<string>Promptly</string>
+	<key>CFBundleExecutable</key>
+	<string>Promptly</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>12.0</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Promptly needs Accessibility access to type prompts into other apps. It never reads your screen, and your clipboard is always restored.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Promptly</string>
+</dict>
+</plist>
