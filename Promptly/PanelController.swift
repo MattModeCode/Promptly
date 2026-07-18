@@ -98,6 +98,17 @@ final class PromptRowView: NSTableRowView {
         didSet {
             setNeedsDisplay(bounds)
             // Lift the cell's title secondary→primary in lockstep (a core Lightfall cue).
+            //
+            // `view(atColumn:)` raises NSRangeException when the row has no column views yet.
+            // AppKit sets `isSelected` during *static* row configuration
+            // (_setPropertiesForRowView:atRow:isStatic:) BEFORE it installs the column views — a path
+            // hit when the palette relayouts (resizePanel → setFrame) while Promptly is the active
+            // app, e.g. right after the "Rebind Hotkey…" window activated it. Unguarded, that threw
+            // an unhandled ObjC exception and crashed the app the instant the palette opened, which
+            // read as "the rebound hotkey crashes it" but was independent of the combo. Guard on
+            // column count: with no columns there is nothing to restyle yet — the real selection
+            // highlight is applied post-reload by applySelectionHighlighting(), when columns exist.
+            guard numberOfColumns > 0 else { return }
             (view(atColumn: 0) as? PromptCellView)?.setSelected(isSelected)
         }
     }
