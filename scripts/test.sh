@@ -49,6 +49,12 @@ run_test HotkeyResolveTests.swift "-framework AppKit"                           
 run_test HotkeyDisplayTests.swift "-framework AppKit"                                HotkeyManager.swift
 run_test LibraryScopeTests.swift  "-framework AppKit"                                PromptStore.swift LibraryScope.swift
 run_test PasteProbeTests.swift    "-framework AppKit -framework ApplicationServices" PasteCore.swift
+# Palette-present crash regression. PromptRowView lives in PanelController, which pulls in the whole
+# UI module, so this links every source except main.swift (which owns the @main entry point).
+run_test PanelRowSelectionCrashTests.swift "-framework AppKit -framework Carbon -framework ApplicationServices" \
+  Capture.swift HotkeyCaptureWindow.swift HotkeyManager.swift LibraryScope.swift LibraryWindowController.swift \
+  Palette.swift PanelController.swift PasteCore.swift PasteService.swift PromptStore.swift RelativeTime.swift \
+  ThemedControls.swift TokenEngine.swift
 echo "== $pass passed, $fail failed =="
 
 if [ "$fail" -ne 0 ]; then printf 'FAILED: %s\n' "${failed_names[@]}"; exit 1; fi
