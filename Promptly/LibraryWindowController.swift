@@ -9,6 +9,12 @@ import AppKit
 // writes files + reloads). If a future change ever makes this window call any of those three,
 // this invariant is void and the "never steal focus" design is broken. See DESIGN.md §5.1.
 
+/// Drag payload for moving a prompt between folders (Stage 9): the list drags a prompt's
+/// `filename` (its ~/Prompts-relative path), the sidebar accepts it onto a folder row. File-scoped
+/// so both the source (`ListViewController`) and target (`SidebarViewController`) VCs — which both
+/// live in this file — share one type identifier. Local-only drag (never leaves the app).
+private let promptDragType = NSPasteboard.PasteboardType("com.promptly.prompt.filename")
+
 // MARK: - Sidebar
 
 private struct SidebarRowItem {
@@ -73,6 +79,10 @@ private final class SidebarViewController: NSViewController {
     var onSelectScope: ((LibraryScope) -> Void)?
     var onNewFolder: (() -> Void)?
     var onDeleteFolder: ((String) -> Void)?
+    var onRenameFolder: ((String) -> Void)?
+    /// Fired when a prompt is dropped onto a folder row — `filename` (the dragged prompt) moves
+    /// into `toFolder` ("" = root). Wired to `LibraryWindowController.movePrompt`.
+    var onMovePrompt: ((_ filename: String, _ toFolder: String) -> Void)?
 
     private var tableView: NSTableView!
     private var rows: [SidebarRowItem] = []
@@ -87,20 +97,24 @@ private final class SidebarViewController: NSViewController {
         tableView.headerView = nil
         tableView.backgroundColor = .clear
         tableView.intercellSpacing = .zero
-        tableView.rowHeight = 26
+        tableView.rowHeight = 32
         tableView.dataSource = self
         tableView.delegate = self
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("sidebar"))
         col.resizingMask = .autoresizingMask
         tableView.addTableColumn(col)
 
-        // Right-click "Delete Folder…" — only shown when the clicked row is a folder
-        // (see `menuNeedsUpdate`).
+        // Right-click "Rename Folder…" / "Delete Folder…" — only shown when the clicked row is a
+        // folder (see `menuNeedsUpdate`, which gates both items as a pair).
         let menu = NSMenu()
         menu.delegate = self
+        menu.addItem(withTitle: "Rename Folder…", action: #selector(renameFolderMenuAction), keyEquivalent: "")
         menu.addItem(withTitle: "Delete Folder…", action: #selector(deleteFolderMenuAction), keyEquivalent: "")
-        menu.items.first?.target = self
+        menu.items.forEach { $0.target = self }
         tableView.menu = menu
+
+        // Accept a prompt dragged from the middle list onto a folder row (Stage 9 move).
+        tableView.registerForDraggedTypes([promptDragType])
 
         let scroll = NSScrollView(frame: container.bounds)
         scroll.autoresizingMask = [.width, .height]
@@ -173,10 +187,37 @@ extension SidebarViewController: NSTableViewDataSource, NSTableViewDelegate {
         case .header: break
         }
     }
+
+    // MARK: Drop target (prompt → folder move, Stage 9)
+
+    /// The folder a prompt dropped onto sidebar row `row` should move INTO, or nil if that row
+    /// rejects prompt drops (headers, "+ new folder", the virtual `.pinned`/`.recent` scopes).
+    /// `.all` resolves to "" — a valid drop that moves the prompt to the root.
+    private func dropDestinationFolder(forRow row: Int) -> String? {
+        guard row >= 0, row < rows.count, case .scope(let s) = rows[row].kind else { return nil }
+        return LibraryScope.dropDestination(s)
+    }
+
+    func tableView(_ tableView: NSTableView, validateDrop info: NSDraggingInfo,
+                   proposedRow row: Int,
+                   proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+        guard dropDestinationFolder(forRow: row) != nil else { return [] }
+        tableView.setDropRow(row, dropOperation: .on)
+        return .move
+    }
+
+    func tableView(_ tableView: NSTableView, acceptDrop info: NSDraggingInfo,
+                   row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
+        guard let filename = info.draggingPasteboard.string(forType: promptDragType),
+              let dest = dropDestinationFolder(forRow: row) else { return false }
+        onMovePrompt?(filename, dest)
+        return true
+    }
 }
 
 extension SidebarViewController: NSMenuDelegate {
-    /// Only show "Delete Folder…" when the right-clicked row is an actual folder row.
+    /// Only show the folder actions ("Rename Folder…" / "Delete Folder…") when the right-clicked
+    /// row is an actual folder row — hide/show them as a pair.
     func menuNeedsUpdate(_ menu: NSMenu) {
         let row = tableView.clickedRow
         let isFolderRow: Bool
@@ -185,7 +226,13 @@ extension SidebarViewController: NSMenuDelegate {
         } else {
             isFolderRow = false
         }
-        menu.items.first?.isHidden = !isFolderRow
+        for item in menu.items { item.isHidden = !isFolderRow }
+    }
+
+    @objc fileprivate func renameFolderMenuAction() {
+        let row = tableView.clickedRow
+        guard row >= 0, row < rows.count, case .scope(.folder(let name)) = rows[row].kind else { return }
+        onRenameFolder?(name)
     }
 
     @objc fileprivate func deleteFolderMenuAction() {
@@ -200,13 +247,15 @@ extension SidebarViewController: NSMenuDelegate {
 private final class PromptListCellView: NSTableCellView {
     let titleLabel = NSTextField(labelWithString: "")
     let descLabel = NSTextField(labelWithString: "")
+    /// Right cluster — pin glyph + hotkey chip (info-forward, strict monochrome). Rebuilt per row.
+    private let rightStack = NSStackView()
 
     init() {
         super.init(frame: .zero)
-        titleLabel.font = Palette.mono(13)
+        titleLabel.font = Palette.cardTitleFont
         titleLabel.textColor = Palette.primary
         titleLabel.lineBreakMode = .byTruncatingTail
-        descLabel.font = Palette.mono(11)
+        descLabel.font = Palette.secondaryFont
         descLabel.textColor = Palette.secondary
         descLabel.lineBreakMode = .byTruncatingTail
         [titleLabel, descLabel].forEach {
@@ -215,13 +264,22 @@ private final class PromptListCellView: NSTableCellView {
             $0.isBordered = false
             addSubview($0)
         }
+        rightStack.translatesAutoresizingMaskIntoConstraints = false
+        rightStack.orientation = .horizontal
+        rightStack.spacing = 6
+        rightStack.alignment = .centerY
+        rightStack.setContentHuggingPriority(.required, for: .horizontal)
+        rightStack.setContentCompressionResistancePriority(.required, for: .horizontal)
+        addSubview(rightStack)
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            descLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: rightStack.leadingAnchor, constant: -8),
+            descLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
             descLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             descLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            rightStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            rightStack.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -229,6 +287,18 @@ private final class PromptListCellView: NSTableCellView {
     func configure(_ prompt: Prompt) {
         titleLabel.stringValue = prompt.name
         descLabel.stringValue = prompt.description ?? " "
+        rightStack.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        if prompt.pinned, #available(macOS 11.0, *),
+           let pin = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned") {
+            pin.isTemplate = true
+            let iv = NSImageView(image: pin)
+            iv.contentTintColor = Palette.textTertiary
+            iv.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
+            rightStack.addArrangedSubview(iv)
+        }
+        if let hotkey = prompt.hotkey {
+            rightStack.addArrangedSubview(ChipView(text: "⌘\(hotkey)", kind: .keycap))
+        }
     }
 }
 
@@ -270,12 +340,14 @@ private final class ListViewController: NSViewController {
         tableView.headerView = nil
         tableView.backgroundColor = .clear
         tableView.intercellSpacing = .zero
-        tableView.rowHeight = 44
+        tableView.rowHeight = 56
         tableView.dataSource = self
         tableView.delegate = self
         let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("list"))
         col.resizingMask = .autoresizingMask
         tableView.addTableColumn(col)
+        // Drag a prompt out to the sidebar to move it between folders (Stage 9). Local-only.
+        tableView.setDraggingSourceOperationMask(.move, forLocal: true)
 
         let scroll = NSScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
@@ -340,6 +412,14 @@ extension ListViewController: NSTableViewDataSource, NSTableViewDelegate, NSText
         onSelectPrompt?(prompts[row])
     }
 
+    /// Provide the dragged prompt's `filename` on the pasteboard so the sidebar can move it into
+    /// a folder (Stage 9). Only `filename` travels — the target re-resolves the live `Prompt`.
+    func tableView(_ tableView: NSTableView, pasteboardWriterForRow row: Int) -> NSPasteboardWriting? {
+        let item = NSPasteboardItem()
+        item.setString(prompts[row].filename, forType: promptDragType)
+        return item
+    }
+
     func controlTextDidChange(_ obj: Notification) {
         onFilterChanged?(filterText)
     }
@@ -370,11 +450,11 @@ private func libraryTextField() -> NSTextField {
     f.focusRingType = .none
     f.translatesAutoresizingMaskIntoConstraints = false
     f.wantsLayer = true
-    f.layer?.backgroundColor = NSColor(white: 1.0, alpha: 0.05).cgColor
-    f.layer?.cornerRadius = 5
+    f.layer?.backgroundColor = Palette.surface2.cgColor
+    f.layer?.cornerRadius = Palette.Radius.control
     f.layer?.masksToBounds = true
     f.layer?.borderWidth = 1
-    f.layer?.borderColor = NSColor(white: 1.0, alpha: 0.12).cgColor
+    f.layer?.borderColor = Palette.borderDefault.cgColor
     return f
 }
 
@@ -396,6 +476,7 @@ private final class DetailViewController: NSViewController, NSTextFieldDelegate 
     private var descriptionField: NSTextField!
     private var bodyView: NSTextView!
     private var warningLabel: NSTextField!
+    private var usageLabel: NSTextField!
     private var saveButton: ThemedButton!
     private var deleteButton: ThemedButton!
 
@@ -440,6 +521,16 @@ private final class DetailViewController: NSViewController, NSTextFieldDelegate 
 
         let titleLabel = libraryLabel("title")
         titleField = libraryTextField()
+        titleField.font = Palette.titleLgFont   // the editor's headline
+
+        // Usage subtitle under the title — read-only meta ("used N× · last used …"), same small
+        // mono/tertiary voice as the field labels. Populated by `refreshUsage()`.
+        usageLabel = NSTextField(labelWithString: "")
+        usageLabel.font = Palette.mono(11)
+        usageLabel.textColor = Palette.footer
+        usageLabel.backgroundColor = .clear
+        usageLabel.isBordered = false
+        usageLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let folderLabel = libraryLabel("folder")
         folderPopUp = ThemedPopUp()
@@ -466,7 +557,7 @@ private final class DetailViewController: NSViewController, NSTextFieldDelegate 
 
         warningLabel = NSTextField(labelWithString: "")
         warningLabel.font = Palette.mono(11)
-        warningLabel.textColor = NSColor(red: 0xf5/255, green: 0xa6/255, blue: 0x23/255, alpha: 1)
+        warningLabel.textColor = Palette.textPrimary   // monochrome — no warning orange (Lightfall)
         warningLabel.backgroundColor = .clear
         warningLabel.isBordered = false
         warningLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -504,7 +595,7 @@ private final class DetailViewController: NSViewController, NSTextFieldDelegate 
         bodyView.isSelectable = true
         scroll.documentView = bodyView
 
-        [titleLabel, titleField, folderLabel, folderPopUp, pinButton,
+        [titleLabel, titleField, usageLabel, folderLabel, folderPopUp, pinButton,
          hotkeyLabel, hotkeyField, descLabel, descriptionField, bodyLabel, scroll,
          warningLabel, saveButton, deleteButton].forEach { content.addSubview($0) }
 
@@ -516,7 +607,12 @@ private final class DetailViewController: NSViewController, NSTextFieldDelegate 
             titleField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
             titleField.heightAnchor.constraint(equalToConstant: 28),
 
-            folderLabel.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 12),
+            // Usage subtitle sits between the title and the folder/hotkey row; those two labels
+            // re-hang off its bottom so everything below flows naturally with minimal reflow.
+            usageLabel.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 6),
+            usageLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
+
+            folderLabel.topAnchor.constraint(equalTo: usageLabel.bottomAnchor, constant: 12),
             folderLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
             folderPopUp.topAnchor.constraint(equalTo: folderLabel.bottomAnchor, constant: 4),
             folderPopUp.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
@@ -531,7 +627,7 @@ private final class DetailViewController: NSViewController, NSTextFieldDelegate 
 
             // Hotkey: fixed width (only ever holds one digit) so it can't be cut off, top-aligned
             // with the folder popup, sitting between the popup and the pin chip.
-            hotkeyLabel.topAnchor.constraint(equalTo: titleField.bottomAnchor, constant: 12),
+            hotkeyLabel.topAnchor.constraint(equalTo: usageLabel.bottomAnchor, constant: 12),
             hotkeyLabel.leadingAnchor.constraint(equalTo: hotkeyField.leadingAnchor),
             hotkeyField.topAnchor.constraint(equalTo: hotkeyLabel.bottomAnchor, constant: 4),
             hotkeyField.trailingAnchor.constraint(equalTo: pinButton.leadingAnchor, constant: -16),
@@ -584,6 +680,19 @@ private final class DetailViewController: NSViewController, NSTextFieldDelegate 
         if prompt == nil {
             view.window?.makeFirstResponder(titleField)
         }
+        refreshUsage()
+    }
+
+    /// Refreshes the read-only usage subtitle from the store. Hidden for an unsaved prompt (no
+    /// filename ⇒ no usage key yet); otherwise "used N× · last used …", or "not yet used" when the
+    /// prompt exists but has never been fired. Non-private so the window controller can refresh it
+    /// from `handleReload()` — it's read-only, so unconditional refresh can't clobber an edit.
+    func refreshUsage() {
+        guard !currentFilename.isEmpty else { usageLabel.isHidden = true; return }
+        usageLabel.isHidden = false
+        usageLabel.stringValue = promptStore.usage(for: currentFilename).map {
+            RelativeTime.usageSummary(count: $0.count, lastUsed: $0.lastUsed, now: Date())
+        } ?? "not yet used"
     }
 
     /// Hotkey is auto-saved (unlike title/body/description) — commit on blur rather than waiting
@@ -731,6 +840,7 @@ private final class DetailViewController: NSViewController, NSTextFieldDelegate 
             deleteButton.isEnabled = true
         }
         captureBaseline()
+        refreshUsage()
         onChanged?()
     }
 }
@@ -764,6 +874,7 @@ final class LibraryWindowController: NSWindowController {
         window.minSize = NSSize(width: 740, height: 420)
         window.backgroundColor = Palette.panelBG
         window.appearance = NSAppearance(named: .darkAqua)
+        window.titlebarAppearsTransparent = true   // titlebar blends into the surface-0 chrome
         window.isReleasedWhenClosed = false
         window.center()
         super.init(window: window)
@@ -808,6 +919,8 @@ final class LibraryWindowController: NSWindowController {
         }
         sidebarVC.onNewFolder = { [weak self] in self?.createFolder() }
         sidebarVC.onDeleteFolder = { [weak self] name in self?.confirmDeleteFolder(name) }
+        sidebarVC.onRenameFolder = { [weak self] name in self?.promptRenameFolder(name) }
+        sidebarVC.onMovePrompt = { [weak self] filename, dest in self?.movePrompt(filename, to: dest) }
 
         listVC.onFilterChanged = { [weak self] _ in self?.refreshList() }
         listVC.onSelectPrompt = { [weak self] prompt in
@@ -877,6 +990,41 @@ final class LibraryWindowController: NSWindowController {
         }
     }
 
+    /// Right-click "Rename Folder…" on the sidebar. A freshly-created empty folder has no files
+    /// yet, so it's renamed purely in memory (swap the tracking-set entry, no disk op). A real
+    /// folder goes through `PromptStore.renameFolder`, which moves the subtree and migrates usage
+    /// keys. `editingAffected` is captured up front (before the store mutates `filename`s) the same
+    /// way `confirmDeleteFolder` does, so the detail pane is reset only when it was showing a
+    /// prompt from the renamed folder.
+    private func promptRenameFolder(_ name: String) {
+        guard let window else { return }
+        let editingAffected = promptStore.prompts.first(where: { $0.filename == detailVC.selectedFilename })?.folder == name
+        NewFolderSheet().present(over: window, title: "Rename folder", initialValue: name,
+                                 confirmTitle: "Rename") { [weak self] newName in
+            guard let self, let newName, newName != name else { return }
+            if self.freshlyCreatedEmptyFolders.contains(name) {
+                self.freshlyCreatedEmptyFolders.remove(name)
+                self.freshlyCreatedEmptyFolders.insert(newName)
+            } else {
+                self.promptStore.renameFolder(name, to: newName)
+            }
+            if editingAffected { self.detailVC.load(prompt: nil) }
+            if self.scope == .folder(name) { self.scope = .folder(newName) }
+            self.refreshList()
+        }
+    }
+
+    /// A prompt dragged from the list onto a sidebar folder row (Stage 9). No-op guard: dropping a
+    /// prompt back onto its own folder must return early — otherwise `move()` would mint a
+    /// collision-safe `foo-2.md` and duplicate the prompt. Otherwise `move()` handles the file +
+    /// usage-key migration and reloads itself; we just refresh the list.
+    private func movePrompt(_ filename: String, to dest: String) {
+        guard let prompt = promptStore.prompts.first(where: { $0.filename == filename }) else { return }
+        guard prompt.folder != dest else { return }
+        promptStore.move(prompt, toFolder: dest)
+        refreshList()
+    }
+
     /// `PromptStore.onReload` fires on every load — both our own saves and external file
     /// changes. Always safe to refresh the sidebar/list (read-only data). The detail pane's
     /// editable fields are deliberately NOT reloaded here — only `persist()`'s own field values
@@ -885,9 +1033,14 @@ final class LibraryWindowController: NSWindowController {
     /// and safe to refresh unconditionally.
     private func handleReload() {
         refreshList()
+        detailVC.refreshUsage()   // read-only meta — safe to refresh even mid-edit (see comment above)
     }
 
     private func refreshList() {
+        // Keep only genuinely-empty in-memory folders (STAGE-9 §5.2): once a fresh folder gains a
+        // prompt, the sidebar derives it from `prompts` anyway, and leaving its name here would send
+        // the rename/delete paths down their in-memory branch and skip the real on-disk op.
+        freshlyCreatedEmptyFolders = freshlyCreatedEmptyFolders.filter { name in !promptStore.prompts.contains { $0.folder == name } }
         let filtered = LibraryScope.filter(scope, prompts: promptStore.prompts,
                                            usage: promptStore.allUsage, query: listVC.filterText)
         let selecting = detailVC.selectedFilename.isEmpty ? nil : detailVC.selectedFilename

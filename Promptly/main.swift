@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var promptStore: PromptStore!
     var panelController: PanelController!
     var accessibilityWindow: NSWindow?
+    var hotkeyCaptureWindow: HotkeyCaptureWindow?
     var libraryWindow: LibraryWindowController?
     var axPollTimer: Timer?
     /// Last-seen Accessibility trust, so we can spot the untrusted→trusted edge (see `refreshAXState`).
@@ -31,11 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelController.onDismiss = {}
         panelController.onEdit = { [weak self] prompt in self?.libraryWindowController().show(editing: prompt) }
 
-        setupStatusItem()
-
+        // Create the hotkey manager BEFORE the status item — `buildMenu()` reads
+        // `hotkeyManager.paletteDisplayString` for the "Hotkey: …" label.
         hotkeyManager = HotkeyManager()
         hotkeyManager.onHotkey = { [weak self] in self?.onHotkey() }
         hotkeyManager.onCaptureHotkey = { [weak self] in self?.onCaptureHotkey() }
+
+        setupStatusItem()
 
         // Auto-detect an Accessibility grant made while we're running. macOS posts this system-wide
         // distributed notification the instant AX settings change; the 2s poll is a fallback in case
@@ -51,6 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    /// Pre-warm the palette offscreen so the first ⌥Space reveals an already-composited frame.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        panelController?.warm()
+    }
 
     private func onHotkey() {
         guard AXIsProcessTrusted() else {
@@ -105,7 +113,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusIcon() {
         let trusted = AXIsProcessTrusted()
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "bolt.fill", accessibilityDescription: "Promptly")
+            button.image = NSImage(systemSymbolName: "text.cursor", accessibilityDescription: "Promptly")
             button.image?.isTemplate = true
             button.alphaValue = trusted ? 1.0 : 0.4
         }
@@ -113,14 +121,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildMenu() -> NSMenu {
         let menu = NSMenu()
-        let axItem = NSMenuItem(title: axStatusTitle(), action: nil, keyEquivalent: "")
+        let axItem = NSMenuItem(title: axStatusTitle(), action: #selector(fixAccessibility), keyEquivalent: "")
         axItem.tag = 100
+        axItem.target = self
         menu.addItem(axItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Hotkey: ⌥Space    Rebind…", action: #selector(rebindHotkey), keyEquivalent: ""))
+        let hotkeyItem = NSMenuItem(title: "Hotkey: " + hotkeyManager.paletteDisplayString, action: nil, keyEquivalent: "")
+        hotkeyItem.tag = 101
+        hotkeyItem.isEnabled = false
+        menu.addItem(hotkeyItem)
+        menu.addItem(NSMenuItem(title: "Rebind Hotkey…", action: #selector(rebindHotkey), keyEquivalent: ""))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Library…", action: #selector(openLibrary), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "New Prompt…", action: #selector(newPrompt), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Library…", action: #selector(openLibrary), keyEquivalent: "l"))
+        menu.addItem(NSMenuItem(title: "New Prompt…", action: #selector(newPrompt), keyEquivalent: "n"))
+        menu.addItem(NSMenuItem(title: "Recent History…", action: #selector(openHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open prompts folder…", action: #selector(openPromptsFolder), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Promptly", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -175,14 +189,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func rebindHotkey() {
-        let alert = NSAlert()
-        alert.messageText = "Hotkey rebinding"
-        alert.informativeText = "Hotkey rebinding is coming in a future update."
-        alert.runModal()
+        let window = HotkeyCaptureWindow(current: hotkeyManager.paletteDisplayString) { [weak self] combo in
+            guard let self else { return }
+            self.hotkeyManager.rebindPalette(keyCode: combo.keyCode, modifiers: combo.modifiers)
+            self.statusItem.menu?.item(withTag: 101)?.title = "Hotkey: " + self.hotkeyManager.paletteDisplayString
+        }
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        hotkeyCaptureWindow = window   // retain until the user picks a combo or cancels
     }
 
     @objc private func openLibrary() { libraryWindowController().showLibrary() }
     @objc private func newPrompt() { libraryWindowController().showNewPrompt() }
+
+    /// Menu-bar "Recent History…" — capture the frontmost app FIRST (as `onHotkey` does, so a
+    /// history re-fire pastes back into it), then open the palette straight into history mode.
+    @objc private func openHistory() {
+        guard AXIsProcessTrusted() else {
+            showAccessibilityWindow()
+            return
+        }
+        guard let captured = Capture.captureFrontmostApp() else { return }
+        panelController.presentHistory(captured: captured)
+    }
 
     /// Lazily created, reused — the Library window is a singleton surface (Stage 9).
     private func libraryWindowController() -> LibraryWindowController {
@@ -197,6 +226,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(PromptStore.promptsDir)
     }
 
+    @objc private func fixAccessibility() {
+        if !AXIsProcessTrusted() { showAccessibilityWindow() }
+    }
+
     func showAccessibilityWindow() {
         if let existing = accessibilityWindow, existing.isVisible { existing.makeKeyAndOrderFront(nil); return }
         let w = AccessibilityPermissionWindow()
@@ -206,7 +239,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func registerFonts() {
-        for name in ["JetBrainsMono-Regular", "JetBrainsMono-Medium"] {
+        for name in ["JetBrainsMono-Regular", "JetBrainsMono-Medium", "JetBrainsMono-SemiBold", "JetBrainsMono-Bold"] {
             if let url = Bundle.main.url(forResource: name, withExtension: "ttf") {
                 CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
             }
@@ -243,52 +276,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 // MARK: - Accessibility Permission Window
 
 final class AccessibilityPermissionWindow: NSWindow {
-    private var bodyLabel: NSTextField!
-    private var actionButton: NSButton!
+    private var statusLabel: NSTextField!
+    private var actionButton: ThemedButton!
 
     init() {
-        let w: CGFloat = 420, h: CGFloat = 230
-        let rect = NSRect(x: 0, y: 0, width: w, height: h)
-        super.init(contentRect: rect,
-                   styleMask: [.titled, .closable],
-                   backing: .buffered,
-                   defer: false)
+        let w: CGFloat = 440, h: CGFloat = 264
+        super.init(contentRect: NSRect(x: 0, y: 0, width: w, height: h),
+                   styleMask: [.titled, .closable], backing: .buffered, defer: false)
         title = "Promptly"
+        titlebarAppearsTransparent = true
         center()
         isReleasedWhenClosed = false
-        backgroundColor = NSColor(red: 0x0f/255, green: 0x0f/255, blue: 0x14/255, alpha: 1)
+        backgroundColor = Palette.surface0
 
         let content = NSView(frame: NSRect(x: 0, y: 0, width: w, height: h))
-        let mono13 = NSFont(name: "JetBrainsMono-Regular", size: 13) ?? NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-        let primaryColor = NSColor(red: 0xe2/255, green: 0xe8/255, blue: 0xf0/255, alpha: 1)
-        let secondaryColor = NSColor(red: 0x94/255, green: 0xa3/255, blue: 0xb8/255, alpha: 1)
 
-        let titleLabel = label("Promptly", font: NSFont(name: "JetBrainsMono-Medium", size: 16) ?? mono13,
-                          color: primaryColor, frame: NSRect(x: 40, y: h-60, width: w-80, height: 24))
+        // Lock glyph (monochrome template — colour-free, off the paste loop).
+        var headlineTop = h - 52
+        if #available(macOS 11.0, *), let img = NSImage(systemSymbolName: "lock.shield", accessibilityDescription: nil) {
+            img.isTemplate = true
+            let iv = NSImageView(image: img)
+            iv.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 26, weight: .regular)
+            iv.contentTintColor = Palette.textSecondary
+            iv.frame = NSRect(x: (w - 34) / 2, y: h - 66, width: 34, height: 34)
+            content.addSubview(iv)
+            headlineTop = h - 100
+        }
+
+        let titleLabel = label("Promptly needs Accessibility access", font: Palette.titleLgFont,
+                               color: Palette.textPrimary, frame: NSRect(x: 28, y: headlineTop, width: w - 56, height: 26))
         titleLabel.alignment = .center
 
-        let body = label("To type prompts into other apps, Promptly\nneeds Accessibility access.\n\nIt never reads your screen, and your\nclipboard is always restored.",
-                         font: mono13, color: secondaryColor, frame: NSRect(x: 40, y: h-160, width: w-80, height: 90))
+        let body = label("macOS requires it to paste into other apps. Nothing is\nread or stored, and your clipboard is always restored.",
+                         font: Palette.bodyFont, color: Palette.textSecondary,
+                         frame: NSRect(x: 28, y: headlineTop - 52, width: w - 56, height: 40))
         body.alignment = .center
 
-        let btn = ghostButton(title: "Open System Settings →",
-                              frame: NSRect(x: w/2 - 130, y: 28, width: 260, height: 32))
-        btn.target = self
-        btn.action = #selector(openSettings)
-        bodyLabel = body
-        actionButton = btn
+        actionButton = ThemedButton(title: "Open System Settings ›", style: .ghost, target: self, action: #selector(openSettings))
+        actionButton.translatesAutoresizingMaskIntoConstraints = true
+        actionButton.frame = NSRect(x: 28, y: 76, width: w - 56, height: 34)
 
-        content.addSubview(titleLabel)
-        content.addSubview(body)
-        content.addSubview(btn)
+        statusLabel = label("Waiting for permission…", font: Palette.metaFont, color: Palette.textSecondary,
+                            frame: NSRect(x: 28, y: 48, width: w - 56, height: 18))
+        statusLabel.alignment = .center
+        statusLabel.setAccessibilityElement(true)
+        statusLabel.setAccessibilityRole(.staticText)
+
+        let trust = label("Promptly only uses this to paste text you trigger.", font: Palette.metaFont,
+                          color: Palette.textSecondary, frame: NSRect(x: 28, y: 24, width: w - 56, height: 16))
+        trust.alignment = .center
+
+        [titleLabel, body, actionButton, statusLabel, trust].forEach { content.addSubview($0) }
         contentView = content
     }
 
-    /// Swap to a confirmation state while the app relaunches to pick up the new grant
-    /// (`AppDelegate.relaunchForAccessibility`).
+    /// Swap to the granted state while the app relaunches to pick up the new grant
+    /// (`AppDelegate.relaunchForAccessibility`). Ring → filled disc via a checkmark; no semantic green.
     func showGrantedState() {
-        bodyLabel.stringValue = "✓ Accessibility granted.\n\nRestarting Promptly…"
+        statusLabel.stringValue = "Granted ✓ — restarting…"
+        statusLabel.textColor = Palette.textPrimary
         actionButton.isHidden = true
+        NSAccessibility.post(element: self, notification: .announcementRequested,
+                             userInfo: [.announcement: "Accessibility granted",
+                                        .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     private func label(_ text: String, font: NSFont, color: NSColor, frame: NSRect) -> NSTextField {
@@ -303,20 +353,6 @@ final class AccessibilityPermissionWindow: NSWindow {
         f.lineBreakMode = .byWordWrapping
         f.maximumNumberOfLines = 0
         return f
-    }
-
-    private func ghostButton(title: String, frame: NSRect) -> NSButton {
-        let btn = NSButton(frame: frame)
-        btn.title = title
-        btn.font = NSFont(name: "JetBrainsMono-Regular", size: 12)
-        btn.wantsLayer = true
-        btn.layer?.cornerRadius = 4
-        btn.layer?.borderWidth = 1.5
-        btn.layer?.borderColor = NSColor(white: 0.9, alpha: 0.25).cgColor
-        btn.layer?.backgroundColor = NSColor.clear.cgColor
-        btn.isBordered = false
-        btn.contentTintColor = NSColor(red: 0xe2/255, green: 0xe8/255, blue: 0xf0/255, alpha: 1)
-        return btn
     }
 
     @objc private func openSettings() {

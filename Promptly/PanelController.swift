@@ -1,11 +1,14 @@
 import AppKit
+import QuartzCore
 
 private let kRowHeight: CGFloat = 38
 private let kFilterHeight: CGFloat = 44
 private let kFooterHeight: CGFloat = 28
 private let kSeparatorHeight: CGFloat = 1
+private let kCaptionHeight: CGFloat = 20
 private let kMaxRows = 6
 private let kPanelWidth: CGFloat = 560
+private let kPreviewMaxHeight: CGFloat = 220   // preview clamps here; taller bodies scroll (Part A)
 
 // MARK: - Pinned-card strip layout
 
@@ -91,15 +94,32 @@ final class FilterField: NSTextField {
 // MARK: - Selected row drawing
 
 final class PromptRowView: NSTableRowView {
-    override var isSelected: Bool { didSet { setNeedsDisplay(bounds) } }
-    override func draw(_ dirtyRect: NSRect) {
-        if isSelected {
-            Palette.selFill.setFill()
-            bounds.fill()
-            let bar = NSRect(x: 0, y: 0, width: 2, height: bounds.height)
-            Palette.selBar.setFill()
-            bar.fill()
+    override var isSelected: Bool {
+        didSet {
+            setNeedsDisplay(bounds)
+            // Lift the cell's title secondary→primary in lockstep (a core Lightfall cue).
+            (view(atColumn: 0) as? PromptCellView)?.setSelected(isSelected)
         }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        guard isSelected else { return }
+        // Lightfall: four stacked, colour-independent cues so "what ↵ fires" reads pre-consciously.
+        // (1) faint fill plate.
+        Palette.selectedFill.setFill()
+        bounds.fill()
+        let railW: CGFloat = 3
+        // (2) rightward glow — drawn INSIDE bounds as a gradient (the content view masksToBounds, so a
+        // CALayer shadow would be clipped flat; this is the blueprint's explicit requirement).
+        if let glow = NSGradient(starting: Palette.selectedRailGlow, ending: .clear) {
+            glow.draw(in: NSRect(x: railW, y: 0, width: 8, height: bounds.height), angle: 0)
+        }
+        // (3) the 3px rail — the primary peripheral signal.
+        Palette.selectedRail.setFill()
+        NSRect(x: 0, y: 0, width: railW, height: bounds.height).fill()
+        // (4) 1px lit top bevel (reads as raised). Row views are flipped, so the top edge is y=0.
+        let topY: CGFloat = isFlipped ? 0 : bounds.height - 1
+        Palette.selectedBevel.setFill()
+        NSRect(x: 0, y: topY, width: bounds.width, height: 1).fill()
     }
     override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 }
@@ -174,63 +194,104 @@ private final class PinnedCardView: NSView {
 
 private final class PromptCellView: NSTableCellView {
     let label = NSTextField(labelWithString: "")
-    // Stage 7: trailing ⌘-number chip for the resting top-9 rows. Empty (zero-width) otherwise,
-    // so a filtered row's title reclaims the full width.
-    let slotLabel = NSTextField(labelWithString: "")
+    /// Trailing ⌘-number chip for a prompt with an explicit hotkey — a solid "permanent promise"
+    /// plate (ChipView). Absent (label reclaims the width) when the prompt has no hotkey.
+    private var chip: ChipView?
+    /// Trailing relative-time label, shown only in history mode. Mutually exclusive with `chip`.
+    private var timeView: NSTextField?
+    private var labelTrailing: NSLayoutConstraint!
+    private var currentName = ""
+    private var currentQuery = ""
+    private var selected = false
+
     init() {
         super.init(frame: .zero)
         label.translatesAutoresizingMaskIntoConstraints = false
-        label.font = Palette.mono(13)
-        label.textColor = Palette.primary
+        label.font = Palette.rowTitleFont
+        label.textColor = Palette.textSecondary
         label.backgroundColor = .clear
         label.isBordered = false
         label.lineBreakMode = .byTruncatingTail
-        slotLabel.translatesAutoresizingMaskIntoConstraints = false
-        slotLabel.font = Palette.mono(11)
-        slotLabel.textColor = Palette.footer
-        slotLabel.backgroundColor = .clear
-        slotLabel.isBordered = false
-        slotLabel.alignment = .right
-        slotLabel.setContentHuggingPriority(.required, for: .horizontal)
-        slotLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         addSubview(label)
-        addSubview(slotLabel)
+        labelTrailing = label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -16)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),  // 3px rail lane + air
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            slotLabel.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 8),
-            slotLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            slotLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labelTrailing,
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, query: String, slot: Int?) {
-        slotLabel.stringValue = slot.map { "⌘\($0)" } ?? ""
-        // One consistent chip style — a hotkey is purely explicit now, no frecency-filled
-        // chip to distinguish it from.
-        slotLabel.font = Palette.mono(11)
-        slotLabel.textColor = Palette.footer
-        if query.isEmpty {
-            label.attributedStringValue = NSAttributedString(
-                string: name,
-                attributes: [.font: Palette.mono(13), .foregroundColor: Palette.primary])
-            return
+    func configure(name: String, query: String, slot: Int?, time: String?) {
+        currentName = name
+        currentQuery = query
+        selected = false
+        chip?.removeFromSuperview()
+        chip = nil
+        timeView?.removeFromSuperview()
+        timeView = nil
+        labelTrailing.isActive = true
+        if let time {
+            // History row — a quiet right-aligned relative time; the title shrinks to make room.
+            let t = NSTextField(labelWithString: time)
+            t.translatesAutoresizingMaskIntoConstraints = false
+            t.font = Palette.metaFont
+            t.textColor = Palette.textTertiary
+            t.backgroundColor = .clear
+            t.isBordered = false
+            t.alignment = .right
+            t.setContentHuggingPriority(.required, for: .horizontal)
+            t.setContentCompressionResistancePriority(.required, for: .horizontal)
+            addSubview(t)
+            labelTrailing.isActive = false
+            NSLayoutConstraint.activate([
+                t.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+                t.centerYAnchor.constraint(equalTo: centerYAnchor),
+                label.trailingAnchor.constraint(lessThanOrEqualTo: t.leadingAnchor, constant: -8),
+            ])
+            timeView = t
+        } else if let slot {
+            let c = ChipView(text: "⌘\(slot)", kind: .hud)
+            addSubview(c)
+            labelTrailing.isActive = false
+            NSLayoutConstraint.activate([
+                c.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+                c.centerYAnchor.constraint(equalTo: centerYAnchor),
+                label.trailingAnchor.constraint(lessThanOrEqualTo: c.leadingAnchor, constant: -8),
+            ])
+            chip = c
         }
-        label.attributedStringValue = highlight(name, query: query)
+        renderTitle()
     }
 
-    private func highlight(_ name: String, query: String) -> NSAttributedString {
+    /// The armed row lifts its title secondary→primary — a core Lightfall cue (luminance, not weight).
+    /// Weight stays constant across selection; only colour + the row rail/fill change.
+    func setSelected(_ isSelected: Bool) {
+        guard isSelected != selected else { return }
+        selected = isSelected
+        renderTitle()
+    }
+
+    private func renderTitle() {
+        let base = selected ? Palette.textPrimary : Palette.textSecondary
+        if currentQuery.isEmpty {
+            label.attributedStringValue = NSAttributedString(
+                string: currentName, attributes: [.font: Palette.rowTitleFont, .foregroundColor: base])
+        } else {
+            label.attributedStringValue = highlight(currentName, query: currentQuery, base: base)
+        }
+    }
+
+    private func highlight(_ name: String, query: String, base: NSColor) -> NSAttributedString {
         let attr = NSMutableAttributedString(
-            string: name,
-            attributes: [.font: Palette.mono(13), .foregroundColor: Palette.primary])
+            string: name, attributes: [.font: Palette.rowTitleFont, .foregroundColor: base])
         let lowerName = Array(name.lowercased())
         let lowerQuery = Array(query.lowercased())
         var qi = 0
         for (i, ch) in lowerName.enumerated() {
             if qi < lowerQuery.count && ch == lowerQuery[qi] {
-                attr.addAttributes([.font: Palette.monoMedium(13),
-                                    .foregroundColor: Palette.matched],
+                // Matched chars: heavier (SemiBold, in-family) + pure white. Weight + brightness only.
+                attr.addAttributes([.font: Palette.monoSemibold(14), .foregroundColor: Palette.matched],
                                    range: NSRange(location: i, length: 1))
                 qi += 1
             }
@@ -265,6 +326,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var panel: NSPanel!
     private var filterField: FilterField!
     private var separator: NSBox!
+    private var captionLabel: NSTextField!
     private var pinnedContainer: NSView!
     private var pinnedLabel: NSTextField!
     private var pinnedContainerHeightConstraint: NSLayoutConstraint!
@@ -274,6 +336,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var tableView: NSTableView!
     private var emptyLabel: NSTextField!
     private var footerLabel: NSTextField!
+    // Preview pane (⇥ toggle, browse-mode only) — read-only raw body of the selected prompt,
+    // collapsed by default (previewHeightConstraint starts at 0). Grows DOWNWARD via resizePanel()'s
+    // top-edge anchor, so the filter field + list above never move.
+    private var previewContainer: NSScrollView!
+    private var previewTextView: NSTextView!
+    private var previewHeightConstraint: NSLayoutConstraint!
 
     private var results: [Prompt] = []
     /// Pinned prompts matching the current filter — a glanceable strip on top of the full
@@ -284,6 +352,15 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var selectedIndex = 0
     private var query: String { filterField?.stringValue ?? "" }
     private var committing = false
+    // Part A: ⇥ toggles a read-only preview of the selected prompt's body. Tracks the user's
+    // *intent* — it can stay true while there's transiently nothing to show (State C); OFF by
+    // default on every present() so a fresh open adds zero latency.
+    private var previewOpen = false
+    // Part B: a third palette mode showing fire-history (recency-desc) instead of the library.
+    // Entered from the menu-bar "Recent History…" item; esc exits back to browse.
+    private var historyMode = false
+    /// filename → last-used, populated only in history mode, for the trailing per-row time label.
+    private var historyDates: [String: Date] = [:]
     /// Set while `applySelectionHighlighting()` programmatically drives `tableView`'s selection,
     /// so `tableViewSelectionDidChange` can tell that apart from a real mouse click and not loop
     /// back into `selectedIndex`.
@@ -304,8 +381,9 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // mid-appearance if hotkeys change on disk via the Library window).
     private var hudSlotByFilename: [String: Int] = [:]
 
-    private static let browseFooter = "↑/↓ move · ↵ paste · ⌘E edit · esc dismiss"
+    private static let browseFooter = "↑/↓ move · ↵ paste · ⌘E edit · ⌘1–9 quick · esc dismiss"
     private static let askFooter    = "↵ / ⇥ next · esc cancel"
+    private static let historyFooter = "↑/↓ move · ↵ paste · ⌘E edit · esc back"
 
     override init() {
         super.init()
@@ -328,9 +406,11 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
         let content = NSView(frame: NSRect(x: 0, y: 0, width: kPanelWidth, height: 300))
         content.wantsLayer = true
-        content.layer?.backgroundColor = Palette.panelBG.cgColor
-        content.layer?.cornerRadius = 10
+        content.layer?.backgroundColor = Palette.surface0.cgColor
+        content.layer?.cornerRadius = Palette.Radius.container
         content.layer?.masksToBounds = true
+        content.layer?.borderWidth = 1
+        content.layer?.borderColor = Palette.panelEdgeInner.cgColor
         panel.contentView = content
         // A manually-assigned contentView on a borderless panel must explicitly
         // track the window frame, or Auto Layout collapses the flexible scroll
@@ -355,6 +435,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             onEdit?(p)
         }
         filterField.onHudSelect = { [weak self] n in self?.hudSelect(n) }
+        filterField.setAccessibilityLabel("Search prompts")
         content.addSubview(filterField)
 
         // Separator
@@ -364,6 +445,16 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         separator.borderWidth = 0
         separator.fillColor = Palette.separator
         content.addSubview(separator)
+
+        // Micro-caption — a quiet section label above the viewport for instant state orientation
+        // ('RECENT' / 'N MATCHES'), held at a constant height so it never shifts the input.
+        captionLabel = NSTextField(labelWithString: "")
+        captionLabel.translatesAutoresizingMaskIntoConstraints = false
+        captionLabel.font = Palette.sectionLabelFont
+        captionLabel.textColor = Palette.textSecondary
+        captionLabel.backgroundColor = .clear
+        captionLabel.isBordered = false
+        content.addSubview(captionLabel)
 
         // Pinned-card strip — collapses to zero height when there are no pinned matches
         // (see `rebuildPinnedCards()`). Its own children are laid out with manual frames
@@ -412,14 +503,41 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         content.addSubview(emptyLabel)
 
         // Footer
-        footerLabel = NSTextField(labelWithString: "↑/↓ move · ↵ paste · ⌘E edit · esc dismiss")
+        footerLabel = NSTextField(labelWithString: Self.browseFooter)
         footerLabel.translatesAutoresizingMaskIntoConstraints = false
-        footerLabel.font = Palette.mono(11)
+        footerLabel.font = Palette.footerKeyFont
         footerLabel.textColor = Palette.footer
         footerLabel.alignment = .center
         footerLabel.backgroundColor = .clear
         footerLabel.isBordered = false
         content.addSubview(footerLabel)
+
+        // Preview pane (⇥ toggle) — a read-only NSTextView in a scroll view, sitting BETWEEN the
+        // results list and the footer. Collapsed (height 0) by default; `updatePreview()` measures
+        // the body and grows it downward, clamped to kPreviewMaxHeight (scroll beyond).
+        previewTextView = NSTextView()
+        previewTextView.minSize = NSSize(width: 0, height: 0)
+        previewTextView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        previewTextView.isVerticallyResizable = true
+        previewTextView.isHorizontallyResizable = false
+        previewTextView.autoresizingMask = .width
+        previewTextView.textContainer?.widthTracksTextView = true
+        previewTextView.isEditable = false
+        previewTextView.isSelectable = false            // never grab focus off the filter field
+        previewTextView.drawsBackground = false
+        previewTextView.backgroundColor = .clear
+        previewTextView.font = Palette.mono(13)
+        previewTextView.textColor = Palette.primary
+        previewTextView.textContainerInset = NSSize(width: 16, height: 8)   // align with the 16pt list inset
+        previewTextView.setAccessibilityLabel("Prompt preview")
+
+        previewContainer = NSScrollView()
+        previewContainer.translatesAutoresizingMaskIntoConstraints = false
+        previewContainer.hasVerticalScroller = false
+        previewContainer.drawsBackground = false
+        previewContainer.backgroundColor = .clear
+        previewContainer.documentView = previewTextView
+        content.addSubview(previewContainer)
 
         // Pin the list height explicitly so Auto Layout can never squeeze it to
         // zero. Updated per state in `applyState()`.
@@ -427,10 +545,13 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             equalToConstant: CGFloat(kMaxRows) * kRowHeight)
         // Zero by default (no pins yet); `rebuildPinnedCards()` grows it to fit.
         pinnedContainerHeightConstraint = pinnedContainer.heightAnchor.constraint(equalToConstant: 0)
+        // Zero by default (preview closed); `updatePreview()` grows it to fit the body.
+        previewHeightConstraint = previewContainer.heightAnchor.constraint(equalToConstant: 0)
 
         NSLayoutConstraint.activate([
             scrollHeightConstraint,
             pinnedContainerHeightConstraint,
+            previewHeightConstraint,
 
             filterField.topAnchor.constraint(equalTo: content.topAnchor),
             filterField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
@@ -442,7 +563,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             separator.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             separator.heightAnchor.constraint(equalToConstant: kSeparatorHeight),
 
-            pinnedContainer.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            captionLabel.topAnchor.constraint(equalTo: separator.bottomAnchor),
+            captionLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 16),
+            captionLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -16),
+            captionLabel.heightAnchor.constraint(equalToConstant: kCaptionHeight),
+
+            pinnedContainer.topAnchor.constraint(equalTo: captionLabel.bottomAnchor),
             pinnedContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             pinnedContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
 
@@ -450,7 +576,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             scrollView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
 
-            footerLabel.topAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            // Preview sits between the list and the footer; height driven by previewHeightConstraint.
+            previewContainer.topAnchor.constraint(equalTo: scrollView.bottomAnchor),
+            previewContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            previewContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+
+            footerLabel.topAnchor.constraint(equalTo: previewContainer.bottomAnchor),
             footerLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             footerLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             footerLabel.bottomAnchor.constraint(equalTo: content.bottomAnchor),
@@ -474,6 +605,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         committing = false
         askFlow = nil
         askPrompt = nil
+        previewOpen = false   // preview is off by default every fresh open (zero added latency)
+        historyMode = false
         restoreBrowseChrome()
         filterField.stringValue = ""
         refreshResults()
@@ -490,14 +623,28 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let x = screen.frame.midX - kPanelWidth / 2
         let y = screen.frame.minY + screen.frame.height * 0.70
         panel.setFrame(NSRect(x: x, y: y, width: kPanelWidth, height: h), display: false)
-        panel.alphaValue = 0
+        // Content is legible on frame 1 — never fade content in. The appear is a scale/shadow settle,
+        // not an opacity ramp (protects the instant-feel).
+        panel.alphaValue = 1
         panel.orderFrontRegardless()
         panel.makeKey()
         panel.makeFirstResponder(filterField)
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.09
-            panel.animator().alphaValue = 1
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+           let layer = panel.contentView?.layer {
+            let scale = CABasicAnimation(keyPath: "transform.scale")
+            scale.fromValue = 0.98
+            scale.toValue = 1.0
+            scale.duration = 0.11
+            scale.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+            layer.add(scale, forKey: "entrance")
         }
+    }
+
+    /// Opens the palette already in history mode — the menu-bar "Recent History…" entry point.
+    /// Mirrors `present`, then flips into history mode (which re-sources rows + swaps chrome).
+    func presentHistory(captured: CapturedApp) {
+        present(captured: captured)
+        enterHistoryMode()
     }
 
     func dismiss() {
@@ -505,42 +652,84 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         onDismiss?()
     }
 
+    /// Pre-composite the panel offscreen so the first ⌥Space reveals an already-rendered frame
+    /// (0 added latency at reveal — graft from the "material depth" direction). No-op while visible
+    /// or before the store is wired.
+    func warm() {
+        guard promptStore != nil, !panel.isVisible else { return }
+        let origin = panel.frame.origin
+        panel.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        panel.orderFrontRegardless()
+        panel.displayIfNeeded()
+        panel.orderOut(nil)
+        panel.setFrameOrigin(origin)
+    }
+
     func dismissAfterSuccessfulPaste() {
         commitAnimation { [weak self] in self?.dismiss() }
     }
 
     func showFailure(message: String) {
-        emptyLabel.stringValue = message
-        emptyLabel.isHidden = false
-        scrollView.isHidden = true
-        // Auto-dismiss after a beat so the failure note is seen but not sticky.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
-            self?.dismiss()
-        }
+        // Loud, honest failure: the panel does NOT fade and does NOT auto-dismiss. The list stays
+        // put; only the footer is replaced by the honest line, and esc dismisses (invariant 3).
+        committing = false
+        footerLabel.isHidden = false
+        footerLabel.attributedStringValue = failureFooter(message)
+        NSAccessibility.post(element: panel as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: message,
+                                        .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
+    private func failureFooter(_ message: String) -> NSAttributedString {
+        let s = NSMutableAttributedString(
+            string: "! ", attributes: [.font: Palette.monoSemibold(11), .foregroundColor: Palette.textPrimary])
+        s.append(NSAttributedString(
+            string: message, attributes: [.font: Palette.footerKeyFont, .foregroundColor: Palette.textPrimary]))
+        return s
     }
 
     // MARK: Results / state
 
     private func refreshResults() {
-        let filtered = promptStore.filter(query)
-        results = filtered
-        pinnedResults = PromptStore.sortedByHotkey(filtered.filter { $0.pinned })
+        if historyMode {
+            // History rows come from the fire-history subset (recency-desc, never-used excluded),
+            // filtered by the same fuzzy match. No pinned strip here — it's a focused usage view.
+            let pairs = promptStore.filterHistory(query)
+            results = pairs.map { $0.0 }
+            pinnedResults = []
+            historyDates = Dictionary(uniqueKeysWithValues: pairs.map { ($0.0.filename, $0.1) })
+        } else {
+            let filtered = promptStore.filter(query)
+            results = filtered
+            pinnedResults = PromptStore.sortedByHotkey(filtered.filter { $0.pinned })
+            historyDates = [:]
+        }
         selectedIndex = 0
         rebuildPinnedCards()
         applyState()
+        updatePreview()   // collapse when nothing is armed; re-render the new top row otherwise
     }
 
     private func applyState() {
         let libraryEmpty = promptStore.prompts.isEmpty
 
         if libraryEmpty {
-            // State A0
-            showEmpty("No prompts yet. Drop a .md file in ~/Prompts to begin →")
+            // State A0 — empty library (distinct from a query that found nothing).
+            captionLabel.stringValue = ""
+            showEmpty("No prompts yet — open the Library (⌘L) to add one")
         } else if results.isEmpty {
-            // State C
-            showEmpty("No match · ↵ to dismiss")
+            // State C — no match. One quiet line, never an error colour, never a shake.
+            captionLabel.stringValue = ""
+            if historyMode && query.isEmpty {
+                showEmpty("No history yet — prompts you fire will show here")
+            } else {
+                showEmpty("No match for \u{201C}\(query)\u{201D}")
+            }
         } else {
-            // State A (recents) or B (filtering)
+            // State A (recents) / B (filtering) / history.
+            captionLabel.stringValue = historyMode
+                ? "HISTORY"
+                : (query.isEmpty ? "RECENT" : "\(results.count) MATCH\(results.count == 1 ? "" : "ES")")
             emptyLabel.isHidden = true
             scrollView.isHidden = false
             pinnedContainer.isHidden = false
@@ -610,6 +799,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard !committing else { return }
         selectedIndex = index
         applySelectionHighlighting()
+        updatePreview()   // an open preview tracks the armed pinned card
     }
 
     /// Applies the combined-index selection to whichever surface it falls in — a pinned card
@@ -639,7 +829,9 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func panelHeight() -> CGFloat {
-        kFilterHeight + kSeparatorHeight + pinnedContainerHeightConstraint.constant + listHeight() + kFooterHeight
+        kFilterHeight + kSeparatorHeight + kCaptionHeight
+            + pinnedContainerHeightConstraint.constant + listHeight()
+            + previewHeightConstraint.constant + kFooterHeight
     }
 
     private func resizePanel() {
@@ -651,6 +843,74 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         panel.setFrame(frame, display: true)
     }
 
+    // MARK: Preview pane (⇥ toggle — browse mode only)
+
+    /// ⇥ flips the preview open/closed. Inert in history mode (the preview is a browse affordance),
+    /// so the history footer/keystrokes are never disturbed.
+    private func togglePreview() {
+        guard !historyMode else { return }
+        previewOpen.toggle()
+        updatePreview()
+        updateBrowseFooter()
+    }
+
+    /// Re-renders the preview for the current selection and resizes the panel (downward, top-edge
+    /// anchored) to match. `previewOpen` is the user's intent; this folds in whether there's actually
+    /// something to show, so an empty/no-match state collapses the pane without losing that intent.
+    /// Inert while a commit is animating.
+    private func updatePreview() {
+        guard !committing else { return }
+        guard previewOpen, let prompt = selectedPrompt else {
+            previewHeightConstraint.constant = 0
+            resizePanel()
+            return
+        }
+        // Base body in primary; every {{…}} token span dimmed to tertiary so tokens read as distinct
+        // machinery. spans() is pure/microsecond-scale over the already-in-memory body.
+        let body = prompt.body
+        let attr = NSMutableAttributedString(
+            string: body, attributes: [.font: Palette.mono(13), .foregroundColor: Palette.primary])
+        for span in TokenEngine.spans(in: body) {
+            attr.addAttribute(.foregroundColor, value: Palette.textTertiary,
+                              range: NSRange(span.range, in: body))
+        }
+        previewTextView.textStorage?.setAttributedString(attr)
+        previewTextView.scrollRangeToVisible(NSRange(location: 0, length: 0))   // always start at top
+        if let container = previewTextView.textContainer {
+            previewTextView.layoutManager?.ensureLayout(for: container)
+            let used = previewTextView.layoutManager?.usedRect(for: container) ?? .zero
+            let contentHeight = ceil(used.height) + previewTextView.textContainerInset.height * 2
+            previewHeightConstraint.constant = min(contentHeight, kPreviewMaxHeight)
+        }
+        resizePanel()
+    }
+
+    // MARK: History mode (menu entry point; esc exits back to browse)
+
+    private func enterHistoryMode() {
+        historyMode = true
+        previewOpen = false
+        filterField.stringValue = ""
+        updateHistoryChrome()
+        refreshResults()
+    }
+
+    private func exitHistoryMode() {
+        historyMode = false
+        previewOpen = false
+        filterField.stringValue = ""
+        restoreBrowseChrome()
+        refreshResults()
+    }
+
+    private func updateHistoryChrome() {
+        filterField.placeholderAttributedString = NSAttributedString(
+            string: "Search history…",
+            attributes: [.font: Palette.mono(14), .foregroundColor: Palette.footer])
+        footerLabel.stringValue = Self.historyFooter
+        footerLabel.isHidden = false
+    }
+
     // MARK: Selection
 
     private func moveSelection(_ delta: Int) {
@@ -658,6 +918,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard total > 0 else { return }
         selectedIndex = max(0, min(total - 1, selectedIndex + delta))
         applySelectionHighlighting()
+        updatePreview()   // an open preview tracks the armed row
     }
 
     private func commitSelected() {
@@ -673,7 +934,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     /// ⌘N — fire the prompt frozen at HUD slot N (Stage 7). Honors the freeze: works against the
     /// at-present-time assignment regardless of the current filter, and is inert during ask mode.
     private func hudSelect(_ n: Int) {
-        guard !committing, !isAsking, let prompt = hudAssignment[n] else { return }
+        guard !committing, !isAsking, !historyMode, let prompt = hudAssignment[n] else { return }
         commit(prompt)
     }
 
@@ -700,11 +961,17 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func enterAskMode(prompt: Prompt, flow: AskFlow) {
         askPrompt = prompt
         askFlow = flow
+        // An open preview has no place under the ask progress line — collapse it first. When the
+        // preview was already closed (the common case) this is a no-op and the frame stays frozen;
+        // only an open preview shrinks, from the top, so nothing above it jumps.
+        previewOpen = false
+        updatePreview()
         // Repurpose the SAME surface: hide the list AND the pinned strip, keep the panel
         // exactly where/what size it is (do NOT call resizePanel — spatial trust, FEATURES §7),
         // turn the field into the answer box, and use the vacated space for a quiet progress line.
         scrollView.isHidden = true
         pinnedContainer.isHidden = true
+        captionLabel.stringValue = ""
         emptyLabel.isHidden = false
         filterField.stringValue = ""
         updateAskChrome()
@@ -742,7 +1009,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private func cancelAsk() {
         askFlow = nil
         askPrompt = nil
-        restoreBrowseChrome()
+        // An ask can be fired from history mode too — return to whichever mode we came from.
+        if historyMode { updateHistoryChrome() } else { restoreBrowseChrome() }
         filterField.stringValue = ""
         refreshResults()
     }
@@ -751,8 +1019,13 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         filterField.placeholderAttributedString = NSAttributedString(
             string: "Search prompts…",
             attributes: [.font: Palette.mono(14), .foregroundColor: Palette.footer])
-        footerLabel.stringValue = Self.browseFooter
+        updateBrowseFooter()
         footerLabel.isHidden = false
+    }
+
+    /// Browse footer with the ⇥-preview hint appended (reflecting the open/closed state).
+    private func updateBrowseFooter() {
+        footerLabel.stringValue = Self.browseFooter + (previewOpen ? " · ⇥ hide preview" : " · ⇥ preview")
     }
 
     // MARK: State D animation
@@ -778,6 +1051,14 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.12
                 self.panel.animator().alphaValue = 0
+                if let layer = self.panel.contentView?.layer {
+                    let s = CABasicAnimation(keyPath: "transform.scale")
+                    s.fromValue = 1.0
+                    s.toValue = 0.985
+                    s.duration = 0.12
+                    s.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
+                    layer.add(s, forKey: "commitScale")
+                }
             }, completionHandler: {
                 self.panel.alphaValue = 1
                 then()
@@ -800,14 +1081,16 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                  doCommandBy commandSelector: Selector) -> Bool {
         switch commandSelector {
         case #selector(NSResponder.cancelOperation(_:)):   // esc
-            if isAsking { cancelAsk() } else { dismiss() }
+            if isAsking { cancelAsk() }
+            else if historyMode { exitHistoryMode() }       // esc leaves history back to browse
+            else { dismiss() }
             return true
         case #selector(NSResponder.insertNewline(_:)):      // ↵
             if isAsking { askAdvance() } else { commitSelected() }
             return true
-        case #selector(NSResponder.insertTab(_:)):          // ⇥ — advances an ask
-            if isAsking { askAdvance(); return true }
-            return false
+        case #selector(NSResponder.insertTab(_:)):          // ⇥ — advances an ask, else toggles preview
+            if isAsking { askAdvance() } else { togglePreview() }
+            return true
         case #selector(NSResponder.moveUp(_:)):             // ↑
             if isAsking { return true }                     // no list in ask mode — swallow
             moveSelection(-1)
@@ -837,11 +1120,13 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return c
         }()
         let prompt = results[row]
-        // The chip shows whenever this exact prompt has an explicit hotkey — from the FROZEN
-        // hudAssignment, not live, so it can't retarget mid-appearance; independent of the
-        // current filter text (a hotkey is a fixed fact about the prompt, not a ranking guess).
-        let slot = hudSlotByFilename[prompt.filename]
-        cell.configure(name: prompt.name, query: query, slot: slot)
+        // History mode: trailing relative-time on each row, no ⌘-chip. Browse mode: the ⌘-chip
+        // shows whenever this exact prompt has an explicit hotkey — from the FROZEN hudAssignment,
+        // not live, so it can't retarget mid-appearance; independent of the current filter text
+        // (a hotkey is a fixed fact about the prompt, not a ranking guess).
+        let time = historyMode ? historyDates[prompt.filename].map { RelativeTime.format($0, now: Date()) } : nil
+        let slot = historyMode ? nil : hudSlotByFilename[prompt.filename]
+        cell.configure(name: prompt.name, query: query, slot: slot, time: time)
         return cell
     }
 
@@ -857,6 +1142,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard row >= 0, row < results.count else { return }
         for card in pinnedCardViews { card.isSelected = false }
         selectedIndex = pinnedResults.count + row
+        updatePreview()   // an open preview tracks a mouse-selected row
     }
 }
 
