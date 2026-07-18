@@ -7,8 +7,11 @@ protocol HotkeyManagerProtocol: AnyObject {
     /// ⌥⇧Space — capture the current selection into a "save as prompt" sheet (Stage 5). Fixed.
     var onCaptureHotkey: (() -> Void)? { get set }
     /// Re-register the palette hotkey to a new combo and persist it. Only the palette hotkey is
-    /// rebindable — the inverse-capture combo stays hardcoded.
-    func rebindPalette(keyCode: UInt32, modifiers: UInt32)
+    /// rebindable — the inverse-capture combo stays hardcoded. Returns `false` (and rolls back to the
+    /// previous combo) if the new one can't be registered, so a failed rebind never leaves the app
+    /// with no working palette hotkey.
+    @discardableResult
+    func rebindPalette(keyCode: UInt32, modifiers: UInt32) -> Bool
     /// The palette hotkey as its menu glyph string (e.g. `⌥Space`), for the status-menu label.
     var paletteDisplayString: String { get }
 }
@@ -98,15 +101,37 @@ final class HotkeyManager: HotkeyManagerProtocol {
     /// relaunch, which reloads from `defaults` in `init`). Unregisters the old palette hot key and
     /// re-registers under the SAME id/signature/target, so the shared Carbon event handler — which
     /// dispatches by hot-key id and is combo-agnostic — keeps routing it without reinstallation.
-    func rebindPalette(keyCode: UInt32, modifiers: UInt32) {
+    ///
+    /// Verifies the registration instead of trusting it (same discipline as the paste read-back):
+    /// `RegisterEventHotKey`'s `OSStatus` is real, and a combo it can't bind would otherwise leave
+    /// the app with NO palette hotkey while the menu still advertises the new one. On failure we roll
+    /// back to the previous (a moment ago working) combo, skip persistence, and return `false` so the
+    /// caller can keep the editor open and tell the user. NOTE: a system-reserved combo (e.g. ⌘Space)
+    /// can still register `noErr` yet be swallowed by macOS before our handler runs — that "silent
+    /// shadow" class isn't detectable here and is Tier B (a live key-press).
+    @discardableResult
+    func rebindPalette(keyCode: UInt32, modifiers: UInt32) -> Bool {
+        let previousKeyCode = paletteKeyCode
+        let previousModifiers = paletteModifiers
         if let ref = paletteRef { UnregisterEventHotKey(ref); paletteRef = nil }
+
+        var newRef: EventHotKeyRef?
+        let status = RegisterEventHotKey(keyCode, modifiers,
+                                         EventHotKeyID(signature: signature, id: paletteHotKeyID),
+                                         GetApplicationEventTarget(), 0, &newRef)
+        guard status == noErr, let newRef else {
+            // Restore the previous (known-good) combo; never persist a combo we couldn't bind.
+            RegisterEventHotKey(previousKeyCode, previousModifiers,
+                                EventHotKeyID(signature: signature, id: paletteHotKeyID),
+                                GetApplicationEventTarget(), 0, &paletteRef)
+            return false
+        }
+        paletteRef = newRef
         paletteKeyCode = keyCode
         paletteModifiers = modifiers
         defaults?.set(Int(keyCode), forKey: Self.keyCodeDefaultsKey)
         defaults?.set(Int(modifiers), forKey: Self.modifiersDefaultsKey)
-        RegisterEventHotKey(keyCode, modifiers,
-                            EventHotKeyID(signature: signature, id: paletteHotKeyID),
-                            GetApplicationEventTarget(), 0, &paletteRef)
+        return true
     }
 
     /// The palette hotkey as its menu glyph string (e.g. `⌥Space`), for the status-menu label.

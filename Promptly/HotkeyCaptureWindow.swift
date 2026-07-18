@@ -42,13 +42,15 @@ final class HotkeyCaptureView: NSView {
 // MARK: - Window
 
 final class HotkeyCaptureWindow: NSWindow {
-    private let onCapture: ((keyCode: UInt32, modifiers: UInt32)) -> Void
+    /// Returns whether the combo was accepted (registered). `false` keeps the editor open so the
+    /// user can pick another — a rebind that couldn't bind must not close as if it had worked.
+    private let onCapture: ((keyCode: UInt32, modifiers: UInt32)) -> Bool
     private let currentCombo: String
     private let captureView = HotkeyCaptureView()
     private var previewLabel: NSTextField!
     private var hintLabel: NSTextField!
 
-    init(current: String, onCapture: @escaping ((keyCode: UInt32, modifiers: UInt32)) -> Void) {
+    init(current: String, onCapture: @escaping ((keyCode: UInt32, modifiers: UInt32)) -> Bool) {
         self.onCapture = onCapture
         self.currentCombo = current
         let w: CGFloat = 420, h: CGFloat = 236
@@ -74,8 +76,13 @@ final class HotkeyCaptureWindow: NSWindow {
         }
         captureView.onCapture = { [weak self] combo in
             guard let self else { return }
-            self.onCapture(combo)
-            self.close()
+            if self.onCapture(combo) {
+                self.close()
+            } else {
+                // Registration failed (combo unavailable) — the manager rolled back to the old
+                // hotkey; keep listening so the user can pick another instead of a dead close.
+                self.hintLabel.stringValue = "That combo is unavailable — try another"
+            }
         }
         content.addSubview(captureView)
 

@@ -190,9 +190,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func rebindHotkey() {
         let window = HotkeyCaptureWindow(current: hotkeyManager.paletteDisplayString) { [weak self] combo in
-            guard let self else { return }
-            self.hotkeyManager.rebindPalette(keyCode: combo.keyCode, modifiers: combo.modifiers)
-            self.statusItem.menu?.item(withTag: 101)?.title = "Hotkey: " + self.hotkeyManager.paletteDisplayString
+            guard let self else { return false }
+            let ok = self.hotkeyManager.rebindPalette(keyCode: combo.keyCode, modifiers: combo.modifiers)
+            if ok {
+                self.statusItem.menu?.item(withTag: 101)?.title = "Hotkey: " + self.hotkeyManager.paletteDisplayString
+            }
+            return ok
         }
         window.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
