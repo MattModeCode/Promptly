@@ -1,6 +1,6 @@
 # FEATURE CATALOG — Promptly
 
-**Status:** Pre-scaffold · **Audience:** the author (solo) · **Purpose:** the one map of the whole feature universe.
+**Status:** Stages 0–10 code-complete · **Audience:** the author (solo) · **Purpose:** the one map of the whole feature universe.
 
 Sibling docs: [PRD.md](PRD.md) · [FEATURES.md](FEATURES.md) · [DESIGN.md](DESIGN.md) · [TASKS.md](TASKS.md) · root [README](../README.md)
 
@@ -47,7 +47,7 @@ Tokens (colors, type, spacing) are **single-sourced in [FEATURES §0](FEATURES.m
 | Feature | Owner | Notes |
 |---------|-------|-------|
 | Menu-bar agent app (`LSUIElement`, status item) | DESIGN §5 | No Dock icon. |
-| Build hygiene: ad-hoc sign, stable bundle ID, fixed path, x86_64, `run.sh` | DESIGN §4.1, §10 | From the first build — the TCC re-grant fix. |
+| Build hygiene: ad-hoc sign, stable bundle ID, fixed path, native arm64, `run.sh` | DESIGN §4.1, §10 | From the first build — the TCC re-grant fix. |
 | Global hotkey ⌥Space (Carbon, consumed, behind protocol) | DESIGN §3 | `HotkeyManager`. |
 | Frontmost-app capture | DESIGN §1, §5 | `Capture` (invariant 1 in one place). |
 | Nonactivating `NSPanel` + filter field + results list | DESIGN §5, FEATURES §1 | `PanelController`. |
@@ -157,7 +157,7 @@ non-goal)** are also in §4 / [PRD §7](PRD.md#7-non-goals-explicit); they are
 | Prompt preview pane | A row's snippet stops being enough to tell two similar prompts apart before ↵. |
 | Search/usage history view | You want to re-fire something you used yesterday but can't recall its name. |
 | Typed / choice `{{ask}}` inputs (enum, date-picker) | Free-text `{{ask}}` (Stage 4) proves too loose for a recurring structured field. |
-| Custom per-prompt hotkeys beyond ⌥1–9 | The 9-slot HUD row (Stage 7) fills and a 10th prompt earns a permanent key. |
+| Custom per-prompt hotkeys beyond ⌘1–9 | The 9-slot HUD row (Stage 7) fills and a 10th prompt earns a permanent key. |
 | Prompt enable/disable (without deleting) | You want to mute a seasonal prompt without losing the file. |
 | Prompts-folder backup / versioning (beyond git) | You edit destructively and want an in-app undo, not a `git checkout`. |
 | Auto-update mechanism | The app is handed to a second person who won't run `run.sh`. |
@@ -167,7 +167,7 @@ non-goal)** are also in §4 / [PRD §7](PRD.md#7-non-goals-explicit); they are
 | iCloud / Git / cloud sync | *(currently a non-goal)* The visible local folder stops being a sufficient "sync". |
 | Cross-platform (Windows/Linux/web) | *(currently a non-goal)* — would break the native never-steal-focus bar; effectively a different product. |
 | SQLite / GRDB / FTS5 | *(ask-first)* In-memory filter latency is *actually* felt (premature <80 prompts) — this is the Stage 6 boundary. |
-| arm64 / universal build | *(currently a non-goal)* x86_64 is the floor; universal is an explicit future decision. |
+| arm64 / universal build | **Shipped** — ships native arm64 by default; the release build is Universal (arm64+x86_64). |
 | Notarization / distribution tooling (Developer ID, `notarytool`, Homebrew cask) | *(currently a non-goal)* The app is actually handed to someone. |
 
 ---
@@ -181,5 +181,5 @@ drift, fix the mirror.
 - **No cloud, no account, no sync** in the foreseeable scope. (A visible local prompt folder is the "sync.")
 - **No cross-platform.** macOS only; native is required, not preferred.
 - **No SQLite/GRDB/FTS5** until the library is large enough to actually need it (premature at <80 prompts).
-- **No arm64/universal build** yet. x86_64 is the floor; universal is a future decision.
+- **Native arm64 by default; Universal (arm64+x86_64) on release.** *(Shipped — no longer a non-goal.)*
 - **No notarization / distribution tooling** until the app is actually handed to someone.

@@ -118,7 +118,7 @@ templates and the full format reference.
 Promptly builds with `swiftc` directly — no Xcode project required.
 
 ```bash
-# Dev loop: compile (x86_64) → bundle → install to /Applications → relaunch → tail logs
+# Dev loop: compile (native arm64) → bundle → install to /Applications → relaunch → tail logs
 ./run.sh
 
 # Release build: Universal (arm64 + x86_64), ad-hoc signed, zipped to ./dist

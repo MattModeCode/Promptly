@@ -1,6 +1,6 @@
 # PRD — Promptly
 
-**Status:** Pre-scaffold · **Audience:** the author (solo) · **Platform:** macOS, native Swift/AppKit, Apple Intel (x86_64)
+**Status:** Stages 0–10 code-complete · **Audience:** the author (solo) · **Platform:** macOS, native Swift/AppKit, Apple Silicon (arm64; Universal release)
 
 Sibling docs: [FEATURES.md](FEATURES.md) · [DESIGN.md](DESIGN.md) · [TASKS.md](TASKS.md) · [FEATURE-CATALOG.md](FEATURE-CATALOG.md) · root [README](../README.md)
 
@@ -78,7 +78,8 @@ imaginary general user now would add weight that fights the feeling.
 - **No cross-platform.** macOS only; native is required, not preferred — Electron/Tauri can't hit
   the never-steal-focus + paste-into-any-app bar.
 - **No SQLite/GRDB/FTS5** until the library is large enough to actually need it (premature at <80 prompts).
-- **No arm64/universal build** yet. x86_64 is the floor; universal is a future decision.
+- **Ships native Apple Silicon (arm64).** The dev loop builds arm64; the release is a Universal
+  (arm64 + x86_64) binary so it still runs on Intel. (Superseded the original x86_64-only floor.)
 - **No notarization / distribution tooling** until the app is actually handed to someone.
 
 ## 8. Staged roadmap (at a glance)
