@@ -278,6 +278,61 @@ func test_move_is_collision_safe_per_folder() {
 }
 
 // ---------------------------------------------------------------------------
+// Stage 9 — PromptStore.renameFolder(_:to:): moves the whole subtree and rewrites every
+// child's relative filename under the new folder path, migrating each usage key so history
+// survives the rename. Same real-temp-dir harness as the move tests (it touches the filesystem).
+// ---------------------------------------------------------------------------
+
+func test_renameFolder_rewrites_children() {
+    print("\nTest — renameFolder(_:to:) moves every child under the new folder path on disk:")
+    withTempPromptsDir { dir in
+        let store = PromptStore(promptsDir: dir)
+        store.load()
+        store.save(name: "Alpha", keywords: [], body: "A.", folder: "Engineering", filename: "")
+        store.save(name: "Beta", keywords: [], body: "B.", folder: "Engineering", filename: "")
+        store.load()
+        check(store.prompts.filter { $0.folder == "Engineering" }.count == 2,
+              "setup: two prompts under Engineering (got \(store.prompts.filter { $0.folder == "Engineering" }.count))")
+
+        store.renameFolder("Engineering", to: "Eng")
+
+        let renamed = store.prompts.filter { $0.folder == "Eng" }
+        check(renamed.count == 2, "both children now live under Eng (got \(renamed.count))")
+        check(store.prompts.allSatisfy { $0.folder != "Engineering" }, "no prompt still reports the old folder")
+        check(FileManager.default.fileExists(atPath: dir.appendingPathComponent("Eng/alpha.md").path),
+              "alpha.md physically present under Eng")
+        check(FileManager.default.fileExists(atPath: dir.appendingPathComponent("Eng/beta.md").path),
+              "beta.md physically present under Eng")
+        check(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("Engineering").path),
+              "the old Engineering directory is gone")
+    }
+}
+
+func test_renameFolder_migrates_usage_keys() {
+    print("\nTest — renameFolder(_:to:) migrates each child's usage key so history survives:")
+    withTempPromptsDir { dir in
+        let store = PromptStore(promptsDir: dir)
+        store.load()
+        store.save(name: "Alpha", keywords: [], body: "A.", folder: "Engineering", filename: "")
+        store.load()
+        guard let p = store.prompts.first(where: { $0.name == "Alpha" }) else {
+            check(false, "setup: prompt should exist after save+load"); return
+        }
+        check(p.filename == "Engineering/alpha.md", "sanity: lives under Engineering (got \(p.filename))")
+        store.recordUse(of: p)
+        store.recordUse(of: p)
+        store.recordUse(of: p)
+
+        store.renameFolder("Engineering", to: "Eng")
+
+        check(store.usage(for: "Eng/alpha.md")?.count == 3,
+              "usage count survived under the new key (got \(String(describing: store.usage(for: "Eng/alpha.md")?.count)))")
+        check(store.usage(for: "Engineering/alpha.md") == nil,
+              "old usage key removed (got \(String(describing: store.usage(for: "Engineering/alpha.md"))))")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Soft delete: delete(_:) moves the file into a hidden trash folder instead of
 // removing it, so a mistaken delete is recoverable. Same withTempPromptsDir
 // harness as the move tests above (delete touches the filesystem too).
@@ -371,6 +426,8 @@ enum TestMain {
         test_move_rewrites_relative_filename()
         test_move_migrates_usage_key()
         test_move_is_collision_safe_per_folder()
+        test_renameFolder_rewrites_children()
+        test_renameFolder_migrates_usage_keys()
         test_delete_moves_to_trash_not_removed()
         test_delete_does_not_reappear_after_reload()
         test_delete_is_collision_safe_in_trash()
