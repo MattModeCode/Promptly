@@ -25,4 +25,10 @@ enum RelativeTime {
         }
         return formatter.string(from: date)
     }
+
+    /// The Library window's usage line — `used N× · last used <relative>`. Composes the count
+    /// with `format` so the relative-time bucket logic stays in one place (and one test surface).
+    static func usageSummary(count: Int, lastUsed: Date, now: Date = Date()) -> String {
+        "used \(count)× · last used \(format(lastUsed, now: now))"
+    }
 }

@@ -1,8 +1,8 @@
 // RelativeTimeTests.swift — Tier A autonomous tests for RelativeTime.format (pulled forward
 // from Stage 10 for the Library window's `used N× · last used …` usage line).
 //
-// Compile + run (x86_64 / Apple Intel):
-//     arch -x86_64 swiftc -target x86_64-apple-macosx12.0 \
+// Compile + run (native arm64):
+//     swiftc -target arm64-apple-macosx12.0 \
 //         Promptly/RelativeTime.swift RelativeTimeTests.swift \
 //         -o /tmp/RelativeTimeTests && /tmp/RelativeTimeTests
 //
@@ -76,6 +76,14 @@ func test_short_date_at_a_week_or_more() {
     check(RelativeTime.format(tenDaysAgo, now: now) == expected, "10d ago → \(expected) (got \(RelativeTime.format(tenDaysAgo, now: now)))")
 }
 
+func test_usage_summary_composes_count_and_relative_time() {
+    print("\nTest — usageSummary composes the count with the relative last-used bucket:")
+    let twoHoursAgo = now.addingTimeInterval(-2 * 3600)
+    let s = RelativeTime.usageSummary(count: 12, lastUsed: twoHoursAgo, now: now)
+    check(s == "used 12× · last used 2h ago",
+          "12 uses, 2h ago → \"used 12× · last used 2h ago\" (got \"\(s)\")")
+}
+
 @main
 enum TestMain {
     static func main() {
@@ -85,6 +93,7 @@ enum TestMain {
         test_yesterday()
         test_weekday_under_a_week()
         test_short_date_at_a_week_or_more()
+        test_usage_summary_composes_count_and_relative_time()
 
         print("\n=== RelativeTime Tier A Results ===")
         print("\(passed) passed, \(failed) failed")

@@ -1,6 +1,6 @@
 # DESIGN — Technical Design
 
-**Status:** Pre-scaffold · **Stack:** native Swift / AppKit · **Arch:** Apple Intel (x86_64)
+**Status:** Stages 0–10 code-complete · **Stack:** native Swift / AppKit · **Arch:** native Apple Silicon (arm64) by default; Universal (arm64+x86_64) on release
 Sibling docs: [PRD.md](PRD.md) · [FEATURES.md](FEATURES.md) · [TASKS.md](TASKS.md) · [FEATURE-CATALOG.md](FEATURE-CATALOG.md)
 
 Seeded from the office-hours design doc (see [Deeper Context](#11-deeper-context)). This is the
@@ -359,10 +359,10 @@ failure is otherwise indistinguishable from a real bug after months away. Log fo
 
 ## 10. Build, run, distribute
 
-- **Spike:** `arch -x86_64 swift PasteProbe.swift`.
-- **App:** `xcodebuild` with `ARCHS=x86_64` (+ `VALID_ARCHS` accordingly), ad-hoc signing, fixed
-  bundle ID, fixed install path — all wrapped in **`run.sh`** (the whole dev loop: build → install
-  → kill → relaunch → tail log). `run.sh` is THE command in the README.
+- **Spike:** `swift PasteProbe.swift` (native arm64).
+- **App:** built **native arm64 by default** (Universal arm64+x86_64 on release), ad-hoc signing,
+  fixed bundle ID, fixed install path — all wrapped in **`run.sh`** (the whole dev loop: build →
+  install → kill → relaunch → tail log). `run.sh` is THE command in the README.
 - **Distribution:** deferred. Build & run locally from Xcode/`run.sh`. When handing to someone:
   direct `.app` zip or a Homebrew cask; **notarization** (Developer ID + `notarytool`) only then —
   don't script it until it's needed. No CI/CD; a manual build+notarize script is plenty until v1.

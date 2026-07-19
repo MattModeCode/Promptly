@@ -11,7 +11,7 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 
 ## 🚦 GATE 0 — The spike (NOTHING past this line until 5/5 green)
 
-`PasteProbe.swift` exists and typechecks for x86_64. Extend it, then run it against all 5 targets.
+`PasteProbe.swift` exists and typechecks (native arm64). Extend it, then run it against all 5 targets.
 
 **Extend the spike:**
 - [x] Add **read-back verification** — after each attempt (B and A), read `kAXValueAttribute` /
@@ -26,12 +26,12 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done.
 - [x] **[review A3] Anchor read-back on the length delta** — confirm the field grew by exactly `marker.count`
   (or equals it for a value-set into an empty field), not a naive `contains()` that false-positives. (`ReadBack`.)
 
-> **Manual run still required (author):** `arch -x86_64 swift PasteProbe.swift`, click into each app within
+> **Manual run still required (author):** `swift PasteProbe.swift` (native arm64), click into each app within
 > the lead time, grant Accessibility to Terminal. The new evidence rows to read: **panel was KEY**,
 > **system-wide role** (expect the panel field), **pid-targeted role** (expect the host field). The gate
 > passes only if the pid-targeted read finds the host field with the panel key.
 
-**Run the matrix** — `arch -x86_64 swift PasteProbe.swift`, click into a field in each app within the lead time:
+**Run the matrix** — `swift PasteProbe.swift` (native arm64), click into a field in each app within the lead time:
 
 | Target | Engine / failure mode | Tier | B (AX write) | A (clipboard) | Clipboard clean after | Read-back confirmed |
 |--------|-----------------------|------|:---:|:---:|:---:|:---:|
@@ -64,7 +64,7 @@ correct, focus never stolen, ~700ms — **and you've reached for ⌥Space withou
 
 - [x] Xcode menu-bar agent app: `LSUIElement`, no Dock icon, status item.
 - [x] **From this first build:** ad-hoc signing (`CODE_SIGN_IDENTITY="-"`), stable
-  `PRODUCT_BUNDLE_IDENTIFIER`, fixed install path, `ARCHS=x86_64`. Write **`run.sh`** (build →
+  `PRODUCT_BUNDLE_IDENTIFIER`, fixed install path, native arm64 (Universal on release). Write **`run.sh`** (build →
   install → kill → relaunch → tail log).
 - [x] `HotkeyManager` — Carbon `RegisterEventHotKey` for ⌥Space, consumed, behind a protocol.
 - [x] `Capture` — snapshot `frontmostApplication` (enforce invariant 1).
@@ -171,7 +171,7 @@ one editor. Because the window never pastes — it never calls `Capture`, `prese
 `PasteService` — it can take focus freely without ever touching the ⌥Space paste loop or the
 ~700ms feel.
 
-- [ ] Three-pane `NSSplitViewController` window (sidebar/list/detail) opened from the menu bar, off the paste loop; `Palette` extracted into a shared `Promptly/Palette.swift`; `PromptStore.move(_:toFolder:)` renames across folders and migrates the usage key; pin/hotkey conflicts resolve by a **user-initiated steal** (clear the prior holder's `pin:`, rewrite, inline warning — distinct from Stage 8's silent load-time handling); `PromptEditorPanel` retired; `main.swift` routes `Library…`/`New Prompt…`/`onEdit`/⌥⇧Space inverse-capture to the window.
+- [x] Three-pane `NSSplitViewController` window (sidebar/list/detail) opened from the menu bar, off the paste loop; `Palette` extracted into a shared `Promptly/Palette.swift`; `PromptStore.move(_:toFolder:)` renames across folders and migrates the usage key; pin/hotkey conflicts resolve by a **user-initiated steal** (clear the prior holder's `pin:`, rewrite, inline warning — distinct from Stage 8's silent load-time handling); `PromptEditorPanel` retired; `main.swift` routes `Library…`/`New Prompt…`/`onEdit`/⌥⇧Space inverse-capture to the window.
 - [ ] **Manual verification (author / Tier B):** split-pane min sizes never collapse to zero; live refresh doesn't clobber an in-progress edit; a pin steal shows the inline warning and rewrites the previous holder's file; a folder move preserves `used N×` history; the Library window taking focus does not affect ⌥Space paste-into-other-apps.
 
 ---

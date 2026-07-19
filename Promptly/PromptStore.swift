@@ -155,6 +155,18 @@ final class PromptStore {
         return comps.count > 1 ? comps.dropLast().joined(separator: "/") : ""
     }
 
+    /// Rewrites ONLY the folder prefix of a relative path, keeping the leaf filename. Matches the
+    /// FULL `old + "/"` prefix (folders can be multi-segment like "a/b"), so "Eng" never matches
+    /// "Engineering/…" and only a true folder move is rewritten. `new == ""` moves the file to
+    /// root. A root file, or a path that doesn't start with `old/`, is returned unchanged. Pure so
+    /// the Tier A test needs no filesystem — the on-disk `move` is elsewhere.
+    static func rewriteFolderPath(_ filename: String, from old: String, to new: String) -> String {
+        let prefix = old + "/"
+        guard filename.hasPrefix(prefix) else { return filename }
+        let leaf = String(filename.dropFirst(prefix.count))
+        return new.isEmpty ? leaf : "\(new)/\(leaf)"
+    }
+
     func filter(_ query: String) -> [Prompt] {
         if query.isEmpty { return ranked() }
         return Self.fuzzyFilter(query, in: prompts)
@@ -211,6 +223,33 @@ final class PromptStore {
             }
             .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.2 < $1.2 }
             .map { $0.0 }
+    }
+
+    // MARK: - History (pure, testable — Feature #4)
+
+    /// Usage (fire) history ordered by recency. Only prompts with a usage entry are included
+    /// (no usage ⇒ never fired ⇒ not history). Pure so the Tier A test needs no store.
+    static func historyOrder(_ prompts: [Prompt], usage: [String: PromptUsage]) -> [(Prompt, Date)] {
+        prompts.enumerated()
+            .compactMap { idx, p -> (Prompt, Date, Int)? in
+                guard let u = usage[p.filename] else { return nil }
+                return (p, u.lastUsed, idx)
+            }
+            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.2 < $1.2 }
+            .map { ($0.0, $0.1) }
+    }
+
+    func history() -> [(Prompt, Date)] {
+        Self.historyOrder(prompts, usage: usage)
+    }
+
+    /// Fuzzy search restricted to the history subset (Feature #4) — typing in history mode
+    /// filters what you've actually fired, never the full library. Empty query preserves
+    /// recency order.
+    func filterHistory(_ query: String) -> [(Prompt, Date)] {
+        if query.isEmpty { return history() }
+        let dates = Dictionary(uniqueKeysWithValues: history().map { ($0.0.filename, $0.1) })
+        return filter(query).compactMap { p in dates[p.filename].map { (p, $0) } }
     }
 
     // MARK: - Mutation
@@ -296,6 +335,45 @@ final class PromptStore {
         }
         suppressReloadUntil = Date().addingTimeInterval(0.3)
         load()
+    }
+
+    /// Renames a folder (Stage 9): moves the whole `old` subtree directory to `new` in one shot,
+    /// then migrates every affected prompt's frecency usage key (the `filename` IS that key, so a
+    /// folder rename must carry the history across — same reason as `move`). Folder is
+    /// directory-derived and never serialized, so no frontmatter is rewritten. Falls back to
+    /// per-prompt `move` (collision-safe, self-migrating, self-reloading) when the destination
+    /// folder already exists (a merge) or the atomic subtree move fails.
+    func renameFolder(_ old: String, to new: String) {
+        guard old != new, !new.isEmpty else { return }
+        let affected = prompts.filter { $0.folder == old }
+        let oldDir = promptsDir.appendingPathComponent(old)
+        let newDir = promptsDir.appendingPathComponent(new)
+
+        // Fast path — no collision: move the whole subtree, then remap usage keys.
+        if !FileManager.default.fileExists(atPath: newDir.path) {
+            do {
+                try FileManager.default.createDirectory(
+                    at: newDir.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try FileManager.default.moveItem(at: oldDir, to: newDir)
+                for p in affected {
+                    let newKey = Self.rewriteFolderPath(p.filename, from: old, to: new)
+                    if let u = usage[p.filename] {
+                        usage[newKey] = u
+                        usage.removeValue(forKey: p.filename)
+                    }
+                }
+                persistUsage()
+                suppressReloadUntil = Date().addingTimeInterval(0.3)
+                load()
+                return
+            } catch {
+                // Subtree move failed — fall through to the collision-safe per-prompt path.
+            }
+        }
+
+        // Merge into an existing folder (or recover from a failed subtree move): move() is
+        // collision-safe, migrates keys, and reloads itself, so delegate and don't double-load.
+        for p in affected { move(p, toFolder: new) }
     }
 
     /// Deletes a folder: every prompt inside is either soft-deleted (mirrors `delete`) or moved to

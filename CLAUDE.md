@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Structure
 
-Stage 1 scaffold built (swiftc-based, no Xcode GUI). Gate 0 Tier B (5-app matrix) still pending.
+Stages 0–10 code-complete (swiftc-based, no Xcode GUI). Gate 0 Tier B (the 5-app matrix) still author-pending.
 
 ```
 CLAUDE.md            # this file
@@ -16,7 +16,7 @@ README.md            # pitch (user-facing) + dev status/run/docs-map
 docs/                # full spec suite: PRD, FEATURES, DESIGN, TASKS
 PasteProbe.swift     # spike: interactive probe of the paste loop (compiles with PasteCore.swift)
 PasteProbeTests.swift # Tier A autonomous tests (compile w/ PasteCore.swift)
-run.sh               # dev loop: compile x86_64 → bundle .app → install → relaunch → tail log
+run.sh               # dev loop: compile arm64 (native) → bundle .app → install → relaunch → tail log
 Promptly/            # the app sources, built with swiftc into /Applications/Promptly.app
   Info.plist         #   LSUIElement agent, com.promptly.app bundle id (TCC-stable)
   PasteCore.swift    #   paste logic extracted VERBATIM from the spike (one source of truth)
@@ -24,7 +24,13 @@ Promptly/            # the app sources, built with swiftc into /Applications/Pro
   HotkeyManager.swift#   Carbon ⌥Space global hotkey (consumes the event)
   PromptStore.swift  #   ~/Prompts loader, frontmatter parse, fuzzy filter, recents, fs-watch
   PasteService.swift #   main-thread paste orchestrator over PasteCore + read-back
-  PanelController.swift # nonactivating NSPanel palette, 5 states, Mattmode Mono
+  TokenEngine.swift  #   {{token}} substitution + {{ask:…}} interactive fill-in flow
+  PanelController.swift # nonactivating NSPanel palette, 5 states, Lightfall design system
+  Palette.swift      #   Lightfall design system (shared colours / type / metrics)
+  ThemedControls.swift # themed buttons, sheets, chips built on Palette
+  LibraryWindowController.swift # three-pane Library window (sidebar/list/detail), off the paste loop
+  LibraryScope.swift #   all / pinned / recent / folder scope model for the Library
+  RelativeTime.swift #   'used N× · last used …' relative-time formatting
   main.swift         #   AppDelegate, status item, AX-permission window, entry point
   Resources/SeedPrompts/ # bundled first-launch .md prompts
 ```
@@ -32,14 +38,14 @@ Promptly/            # the app sources, built with swiftc into /Applications/Pro
 ## Essential Commands
 
 ```bash
-arch -x86_64 swift Promptly/PasteCore.swift PasteProbe.swift   # run the spike (Intel / x86_64)
+swift Promptly/PasteCore.swift PasteProbe.swift               # run the spike (native arm64)
 ./run.sh                                                       # build → install → relaunch → tail log
 ```
 
 The pure paste logic now lives in `Promptly/PasteCore.swift` (extracted verbatim from the
 spike); both the probe and the shipping `PasteService` compile against it — one source of truth.
 
-Build everything for **Apple Intel (x86_64)** — see Boundaries.
+Build **native Apple Silicon (arm64)** by default; `./run.sh --universal` (and `scripts/release.sh`) ship a fat arm64+x86_64 binary — see Boundaries.
 
 ## Architecture
 
@@ -56,7 +62,7 @@ The staged roadmap (tokens, capture hotkey, frecency, adaptive cards) lives in t
 
 ### Always
 - Native Swift / AppKit. No Electron/Tauri — they can't hit the never-steal-focus + paste-into-any-app bar.
-- Build for Apple Intel / **x86_64** (`arch -x86_64` for the spike, `ARCHS=x86_64` for the app target). Universal/arm64 is an explicit future decision, not a default.
+- Build **native Apple Silicon (arm64)** by default (`./run.sh`). The release build (`scripts/release.sh`, or `./run.sh --universal`) is a **Universal** arm64+x86_64 binary so it still runs on Intel. The code is arch-clean — it typechecks and links on both slices.
 - Prove the paste loop before building UI or a store. Build AX direct write (Strategy B) before the clipboard fallback (Strategy A).
 
 ### Ask first
@@ -99,7 +105,7 @@ Everything here runs headless with no foreign-app focus and no TCC approval beyo
 > `PasteCore.swift` extraction + a test file (see *Testability structure*, planned — not built
 > yet). They activate in Stage 1; until then "keep Tier A green" means the typecheck gate passes.
 
-- **Typecheck gate:** `arch -x86_64 swiftc -typecheck Promptly/*.swift` — must exit 0. *(Runs today.)*
+- **Typecheck gate:** `swiftc -typecheck Promptly/*.swift` — must exit 0. *(Runs today, native arm64.)*
 - **Clipboard snapshot/restore round-trip** — assert the pasteboard is byte-identical after a
   Strategy A paste (the HARD RULE in DESIGN §2.4 and Boundaries → Never).
 - **Capability-probe decision table** — feed synthetic `Evidence` to `choosePath` and assert every

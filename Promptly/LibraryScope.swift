@@ -36,4 +36,16 @@ extension LibraryScope {
         }
         return query.isEmpty ? scoped : PromptStore.fuzzyFilter(query, in: scoped)
     }
+
+    /// The folder a drag-drop onto this sidebar row should move a prompt INTO, or nil when the
+    /// row is a virtual scope with no backing folder. `.all` accepts a drop to root (""),
+    /// `.folder(name)` into that folder; `.pinned`/`.recent` reject it (nil). Pure + Tier-A
+    /// testable — the drop plumbing lives in the window controller.
+    static func dropDestination(_ scope: LibraryScope) -> String? {
+        switch scope {
+        case .all: return ""
+        case .folder(let name): return name
+        case .pinned, .recent: return nil
+        }
+    }
 }

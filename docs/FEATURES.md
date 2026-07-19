@@ -11,6 +11,13 @@ the whole game.
 
 ## 0. Visual system — Mattmode Mono
 
+> **Revamped 2026-07-18 → "Lightfall" (v0.2.0).** The visual system was rebuilt via a judged design
+> review into **Lightfall** — the same dark / opaque / monochrome ethos at a higher finish: one
+> unified surface ladder, a 3-step radius scale, a modular JetBrains Mono type scale (four weights),
+> and a four-cue selected-row signal (fill plate + glowing left rail + top bevel + title luminance
+> lift). Native Apple Silicon, still zero hue. **The live tokens now live in `Promptly/Palette.swift`;**
+> the build-values table below is the historical Mattmode Mono baseline it grew from.
+
 Chosen via `/design-shotgun` (2026-06-19) over a native-macOS direction and a hybrid. A
 developer's command palette in the Cursor/Grok register: **opaque, monochrome, mono type, dark
 only.** No translucency, no color. Approved reference render + comparison board live in-repo at
@@ -65,8 +72,8 @@ A single centered, nonactivating panel floating above the host app. It never ste
 - **Truncation:** title has priority — the muted snippet truncates first (ellipsis), and only if
   the title alone would overflow ~560pt does the title itself ellipsis. A title min-width keeps it
   always readable; the snippet yields the space.
-- **⌥-number chip:** MVP **collapses** the chip column — title + snippet use the full row width.
-  Stage 7 reflows the row to introduce the trailing ⌥-number column when chips actually exist
+- **⌘-number chip:** MVP **collapses** the chip column — title + snippet use the full row width.
+  Stage 7 reflows the row to introduce the trailing ⌘-number column when chips actually exist
   (a one-time geometry change, called out here so it's expected, not a surprise reshuffle).
 - No decorative icons in MVP.
 
@@ -295,20 +302,20 @@ captured text as the body**, cursor in an empty **title** field (the one thing y
 Hint that dynamic bits could become `{{tokens}}` (later). ↵ saves a new markdown file; esc
 discards. Same focus-respecting discipline as the palette. *Acceptance criteria only at this stage.*
 
-### Stage 7 — Adaptive ⌥1–9 HUD row ("a keyboard, not a piano")
+### Stage 7 — Adaptive ⌘1–9 HUD row ("a keyboard, not a piano")
 **Fixed 9 positions, always in the same place; only the *content* reorders** by app/time-of-day.
 The number is the constant the hand learns; the label under it changes. **Positions freeze for
 the duration of any single appearance — never animate a live reshuffle**; re-sort only between
 opens. Shown as a thin persistent strip, numerals dominant.
 
 ```
-  ⌥1 Standup   ⌥2 PR desc   ⌥3 Bug triage   ⌥4 Review   ⌥5 Cold intro   …   ⌥9 Cheatsheet
+  ⌘1 Standup   ⌘2 PR desc   ⌘3 Bug triage   ⌘4 Review   ⌘5 Cold intro   …   ⌘9 Cheatsheet
 ```
 
 ### Stage 8 — Manual pinning ("a keyboard you can also relabel")
-Stage 7's ⌥1–9 are auto-sorted by frecency. Stage 8 lets the user **pin** up to 9 prompts to a
-chosen ⌥-number (frontmatter `pin: 3`). **Hybrid rule:** a pin claims its exact number first; any
-slot left unpinned auto-fills from the existing frecency assignment. ⌥1–9 stay **palette-only** —
+Stage 7's ⌘1–9 are auto-sorted by frecency. Stage 8 lets the user **pin** up to 9 prompts to a
+chosen ⌘-number (frontmatter `pinned: true` + `hotkey: 3`; `pin: 3` is legacy, read-migrated only). **Hybrid rule:** a pin claims its exact number first; any
+slot left unpinned auto-fills from the existing frecency assignment. ⌘1–9 stay **palette-only** —
 no new global hotkeys, no height/resize math touched (a draw-only chip change over the frozen HUD map).
 
 A **pinned chip reads differently from a frecency chip** — "permanent promise" vs. "today's guess".
@@ -319,9 +326,9 @@ dim footer text:
    ┌──────────────────────────────────────────────────────────┐
    │  Search prompts…                                          │
    ├──────────────────────────────────────────────────────────┤
-   │ ▸ Bug report triage         file a structured bug …  ▐⌥3▌ │  ← PINNED: filled pill, primary text
-   │   Cold outreach             short intro to a founder…  ⌥5 │  ← frecency: bare, dim footer
-   │   PR description            summarize the diff, risk…  ⌥1 │  ← frecency: bare, dim footer
+   │ ▸ Bug report triage         file a structured bug …  ▐⌘3▌ │  ← PINNED: filled pill, primary text
+   │   Cold outreach             short intro to a founder…  ⌘5 │  ← frecency: bare, dim footer
+   │   PR description            summarize the diff, risk…  ⌘1 │  ← frecency: bare, dim footer
    └──────────────────────────────────────────────────────────┘
            ↑/↓ move · ↵ paste · esc dismiss
 ```
@@ -336,7 +343,7 @@ because the pin is a persistent promise the hand can trust regardless of what's 
    │  co                                                       │
    ├──────────────────────────────────────────────────────────┤
    │ ▸ Cold outreach             short intro to a founder…     │  ← frecency chip gone while filtering
-   │   Code review pass          review this diff for …   ▐⌥3▌ │  ← PINNED: chip still shown
+   │   Code review pass          review this diff for …   ▐⌘3▌ │  ← PINNED: chip still shown
    └──────────────────────────────────────────────────────────┘
 ```
 
@@ -362,7 +369,7 @@ does not apply here. The fast ⌥Space palette and the ~700ms loop are untouched
    │                 │ │ Structured repro for │ │  └───────────────────────────────┘  │
    │ folders         │ │ filing issues        │ │  folder            pin     hotkey   │
    │ ▸ Engineering 3 │ ├──────────────────────┤ │  ┌────────────┐  ( ●) ┌──────────┐  │
-   │ ▸ Comms       2 │ │ Code review checklist│ │  │ Engineering▾│       │ ⌥1       │  │
+   │ ▸ Comms       2 │ │ Code review checklist│ │  │ Engineering▾│       │ ⌘1       │  │
    │ ▸ Writing     2 │ │ What to check before │ │  description                        │
    │ + new folder    │ │ approving a PR       │ │  ┌───────────────────────────────┐  │
    │                 │ ├──────────────────────┤ │  │ Structured repro for filing … │  │
@@ -386,8 +393,8 @@ does not apply here. The fast ⌥Space palette and the ~700ms loop are untouched
   field; description; body textarea (tokens supported); a `used N× · last used …` line; red `delete`.
 
 **Pin/hotkey conflicts resolve by a user-initiated steal.** Turning the pin toggle on with a number
-already held by another prompt clears that prompt's `pin:` (rewriting its file), claims the slot for
-the one being edited, and shows an inline warning: `⌥3 was on 'X' — moved here`. This is deliberately
+already held by another prompt clears that prompt's `pinned:`/`hotkey:` (rewriting its file), claims the slot for
+the one being edited, and shows an inline warning: `⌘3 was on 'X' — moved here`. This is deliberately
 destructive — distinct from Stage 8's *silent, non-destructive* load-time conflict handling (which
 never rewrites a file). At load nothing is touched; here the user explicitly asked to take the slot,
 so the editor rewrites it and says so.
@@ -397,9 +404,9 @@ Same Mattmode Mono surface as the palette — see §8.
 ### Stage 10 — Library polish
 No new mockup (same window). Adds: **drag-to-move** a prompt between sidebar folders; **folder
 rename**; an **inline pin-conflict banner** that surfaces Stage 8's *silent* load-time conflict (two
-files on disk declaring the same `pin:` — the deterministic loser is unpinned for assignment but its
+files on disk declaring the same `hotkey:` — the deterministic loser is unpinned for assignment but its
 file is never touched) — this is render-only, the opposite of Stage 9's steal: nothing is rewritten,
-the banner just tells the loser's editor "⌥3 is already on 'X'" so a human can resolve it; and
+the banner just tells the loser's editor "⌘3 is already on 'X'" so a human can resolve it; and
 **relative-time** usage display (`"2h ago"`, `"yesterday"`, `"3d ago"`) replacing a raw timestamp.
 
 ---

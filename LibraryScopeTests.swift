@@ -1,9 +1,8 @@
 // LibraryScopeTests.swift — Tier A autonomous tests for the Library window's sidebar scope
 // filter (Stage 9). Pure, no NSView, no filesystem.
 //
-// Compile + run (x86_64 / Apple Intel):
-//     arch -x86_64 swiftc -framework AppKit \
-//         -target x86_64-apple-macosx12.0 \
+// Compile + run (native arm64):
+//     swiftc -framework AppKit -target arm64-apple-macosx12.0 \
 //         Promptly/PromptStore.swift Promptly/LibraryScope.swift LibraryScopeTests.swift \
 //         -o /tmp/LibraryScopeTests && /tmp/LibraryScopeTests
 //
@@ -89,6 +88,18 @@ func test_query_composes_on_top_of_scope() {
     check(result.first?.name == "Bug report", "the unpinned bug match is excluded by scope (got \(result.map { $0.name }))")
 }
 
+func test_dropDestination_maps_rows() {
+    print("\nTest — dropDestination maps each sidebar row to its drop-target folder (or nil):")
+    check(LibraryScope.dropDestination(.all) == "",
+          ".all drops to root \"\" (got \(String(describing: LibraryScope.dropDestination(.all))))")
+    check(LibraryScope.dropDestination(.folder("Engineering")) == "Engineering",
+          ".folder(name) drops into that folder (got \(String(describing: LibraryScope.dropDestination(.folder("Engineering")))))")
+    check(LibraryScope.dropDestination(.pinned) == nil,
+          ".pinned is a virtual scope, not a drop target (got \(String(describing: LibraryScope.dropDestination(.pinned))))")
+    check(LibraryScope.dropDestination(.recent) == nil,
+          ".recent is a virtual scope, not a drop target (got \(String(describing: LibraryScope.dropDestination(.recent))))")
+}
+
 @main
 enum TestMain {
     static func main() {
@@ -98,6 +109,7 @@ enum TestMain {
         test_recent_orders_by_frecency_top_n()
         test_folder_returns_exact_match_only()
         test_query_composes_on_top_of_scope()
+        test_dropDestination_maps_rows()
 
         print("\n=== LibraryScope Tier A Results ===")
         print("\(passed) passed, \(failed) failed")

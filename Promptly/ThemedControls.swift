@@ -34,8 +34,6 @@ class ThemedButton: NSButton {
     private var focused = false
     private var tracking: NSTrackingArea?
 
-    private static let red = NSColor(red: 0xef/255, green: 0x44/255, blue: 0x44/255, alpha: 1)
-
     init(title: String, style: Style = .standard, target: AnyObject?, action: Selector?) {
         self.style = style
         super.init(frame: .zero)
@@ -54,28 +52,31 @@ class ThemedButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    // Colors — monochrome; destructive is the one functional chroma.
+    // Colors — strictly monochrome (Lightfall). The one high-emphasis CTA is an inverted near-white
+    // plate; destructive reads as danger through luminance + confirmation + friction, never hue.
     private func fillColor() -> NSColor {
         switch style {
         case .ghost: return NSColor(white: 1, alpha: hovering ? 0.05 : 0.0)
         case .standard: return NSColor(white: 1, alpha: (hovering ? 0.10 : 0.06) - (pressed ? 0.03 : 0))
-        case .primary: return NSColor(white: 1, alpha: (hovering ? 0.17 : 0.13) - (pressed ? 0.03 : 0))
-        case .destructive: return Self.red.withAlphaComponent(hovering ? 0.10 : 0.05)
+        case .primary:
+            let a: CGFloat = pressed ? 0.86 : (hovering ? 1.0 : 0.94)
+            return Palette.primaryButtonFill.withAlphaComponent(a)
+        case .destructive: return NSColor(white: 1, alpha: hovering ? 0.10 : 0.05)
         }
     }
     private func borderColor() -> NSColor {
-        if focused { return NSColor(white: 1, alpha: 0.40) }
+        if focused { return Palette.borderFocus }
         switch style {
-        case .standard, .ghost: return NSColor(white: 1, alpha: 0.14)
-        case .primary: return NSColor(white: 1, alpha: 0.22)
-        case .destructive: return Self.red.withAlphaComponent(0.45)
+        case .standard, .ghost: return Palette.borderDefault
+        case .primary: return NSColor(white: 1, alpha: 0.0)   // the plate needs no outline
+        case .destructive: return NSColor(white: 1, alpha: hovering ? 0.20 : 0.12)
         }
     }
     private func textColor() -> NSColor {
         switch style {
-        case .destructive: return Self.red
-        case .primary: return .white
-        default: return Palette.primary
+        case .destructive: return hovering ? .white : Palette.textPrimary
+        case .primary: return Palette.surface0   // dark text on the near-white plate
+        default: return Palette.textPrimary
         }
     }
 
@@ -158,7 +159,7 @@ final class PinChipButton: ThemedButton {
             if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: isOn ? "Pinned" : "Pin") {
                 img.isTemplate = true
                 image = img
-                contentTintColor = isOn ? .white : Palette.secondary
+                contentTintColor = isOn ? Palette.surface0 : Palette.secondary
             }
         }
         applyStyle()
@@ -178,10 +179,10 @@ final class ThemedPopUp: NSPopUpButton {
         font = Palette.mono(12)
         contentTintColor = Palette.primary
         wantsLayer = true
-        layer?.cornerRadius = 6
+        layer?.cornerRadius = Palette.Radius.control
         layer?.borderWidth = 1
-        layer?.backgroundColor = NSColor(white: 1, alpha: 0.06).cgColor
-        layer?.borderColor = NSColor(white: 1, alpha: 0.14).cgColor
+        layer?.backgroundColor = Palette.surface2.cgColor
+        layer?.borderColor = Palette.borderDefault.cgColor
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -209,25 +210,31 @@ final class NewFolderSheet: NSObject, NSTextFieldDelegate {
     // Self-retain for the sheet's lifetime so the caller doesn't have to hold it.
     private static var active: NewFolderSheet?
 
-    func present(over host: NSWindow, completion: @escaping (String?) -> Void) {
+    /// Doubles as a rename sheet via defaulted params (Stage 9) — `title`/`confirmTitle` relabel
+    /// the header and confirm button, `initialValue` pre-seeds the field. Old "New folder" call
+    /// sites keep working unchanged through the defaults. One sheet, never cloned.
+    func present(over host: NSWindow, title: String = "New folder", initialValue: String = "",
+                 confirmTitle: String = "Create", completion: @escaping (String?) -> Void) {
         self.completion = completion
         NewFolderSheet.active = self
-        build()
+        build(title: title, confirmTitle: confirmTitle)
+        field.stringValue = initialValue
+        refreshConfirmEnabled()   // reflect the seeded text (confirm stays disabled while blank)
         host.beginSheet(sheet, completionHandler: nil)
         sheet.makeFirstResponder(field)
     }
 
-    private func build() {
+    private func build(title: String, confirmTitle: String) {
         let pad: CGFloat = 20
         sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 150),
                          styleMask: [.titled], backing: .buffered, defer: false)
         sheet.appearance = NSAppearance(named: .darkAqua)
         let content = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 150))
         content.wantsLayer = true
-        content.layer?.backgroundColor = Palette.panelBG.cgColor
+        content.layer?.backgroundColor = Palette.surface2.cgColor
         sheet.contentView = content
 
-        let header = NSTextField(labelWithString: "New folder")
+        let header = NSTextField(labelWithString: title)
         header.font = Palette.monoMedium(14)
         header.textColor = Palette.primary
         header.backgroundColor = .clear
@@ -243,16 +250,16 @@ final class NewFolderSheet: NSObject, NSTextFieldDelegate {
         field.focusRingType = .none
         field.translatesAutoresizingMaskIntoConstraints = false
         field.wantsLayer = true
-        field.layer?.backgroundColor = NSColor(white: 1, alpha: 0.05).cgColor
-        field.layer?.cornerRadius = 5
+        field.layer?.backgroundColor = Palette.surface2.cgColor
+        field.layer?.cornerRadius = Palette.Radius.control
         field.layer?.masksToBounds = true
         field.layer?.borderWidth = 1
-        field.layer?.borderColor = NSColor(white: 1, alpha: 0.12).cgColor
+        field.layer?.borderColor = Palette.borderDefault.cgColor
         field.delegate = self
 
         let cancelButton = ThemedButton(title: "Cancel", style: .ghost, target: self, action: #selector(cancelTapped))
         cancelButton.keyEquivalent = "\u{1b}"   // Esc
-        createButton = ThemedButton(title: "Create", style: .primary, target: self, action: #selector(createTapped))
+        createButton = ThemedButton(title: confirmTitle, style: .primary, target: self, action: #selector(createTapped))
         createButton.keyEquivalent = "\r"        // ↵ default
         createButton.isEnabled = false
 
@@ -274,6 +281,12 @@ final class NewFolderSheet: NSObject, NSTextFieldDelegate {
     }
 
     func controlTextDidChange(_ obj: Notification) {
+        refreshConfirmEnabled()
+    }
+
+    /// Confirm is disabled while the (trimmed) field is blank — shared by the live edit callback
+    /// and the initial seed in `present`, so a pre-filled rename shows an enabled confirm at once.
+    private func refreshConfirmEnabled() {
         createButton.isEnabled = !field.stringValue.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
@@ -336,7 +349,7 @@ final class DeleteFolderSheet: NSObject {
         sheet.appearance = NSAppearance(named: .darkAqua)
         let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 220))
         content.wantsLayer = true
-        content.layer?.backgroundColor = Palette.panelBG.cgColor
+        content.layer?.backgroundColor = Palette.surface2.cgColor
         sheet.contentView = content
 
         let header = NSTextField(labelWithString: "Delete folder \"\(folderName)\"?")
@@ -451,7 +464,7 @@ final class ConfirmSheet: NSObject {
         sheet.appearance = NSAppearance(named: .darkAqua)
         let content = NSView(frame: NSRect(x: 0, y: 0, width: width, height: 150))
         content.wantsLayer = true
-        content.layer?.backgroundColor = Palette.panelBG.cgColor
+        content.layer?.backgroundColor = Palette.surface2.cgColor
         sheet.contentView = content
 
         let header = NSTextField(labelWithString: title)
@@ -502,5 +515,59 @@ final class ConfirmSheet: NSObject {
         completion?(result)
         completion = nil
         ConfirmSheet.active = nil
+    }
+}
+
+// MARK: - ChipView (HUD hotkey chips, footer keycaps, Library hotkey badges)
+
+/// A small rounded chip rendering a short mono string. One shared primitive for the palette's
+/// per-row hotkey chip (a solid "permanent promise" plate), the keyboard-footer keycaps, and the
+/// Library list's hotkey badges. Custom-drawn so it carries real internal padding (which a bare
+/// NSTextField can't) — strict monochrome, no hue.
+final class ChipView: NSView {
+    enum Kind {
+        case hud       // solid surface-3 plate, primary glyph — an explicit hotkey
+        case keycap    // faint fill, hairline border, tertiary glyph — a keyboard-footer key
+    }
+    private let text: String
+    private let kind: Kind
+    private static let hPad: CGFloat = 6
+    private static let chipHeight: CGFloat = 18
+
+    init(text: String, kind: Kind) {
+        self.text = text
+        self.kind = kind
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        wantsLayer = true
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    private var chipFont: NSFont { kind == .keycap ? Palette.footerKeyFont : Palette.hudNumeralFont }
+    private var chipTextColor: NSColor { kind == .keycap ? Palette.textTertiary : Palette.textPrimary }
+
+    override var intrinsicContentSize: NSSize {
+        let w = NSAttributedString(string: text, attributes: [.font: chipFont]).size().width
+        return NSSize(width: ceil(w) + Self.hPad * 2, height: Self.chipHeight)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        let path = NSBezierPath(roundedRect: rect, xRadius: Palette.Radius.chip, yRadius: Palette.Radius.chip)
+        switch kind {
+        case .hud:
+            Palette.pinnedChipFill.setFill(); path.fill()
+            NSColor(white: 1, alpha: 0.14).setStroke()
+        case .keycap:
+            Palette.keycapFill.setFill(); path.fill()
+            Palette.hairline.setStroke()
+        }
+        path.lineWidth = 1
+        path.stroke()
+        let s = NSAttributedString(string: text, attributes: [.font: chipFont, .foregroundColor: chipTextColor])
+        let sz = s.size()
+        s.draw(at: NSPoint(x: (bounds.width - sz.width) / 2, y: (bounds.height - sz.height) / 2))
     }
 }
